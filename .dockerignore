@@ -1,0 +1,13 @@
+node_modules
+.next
+.git
+.DS_Store
+._*
+**/._*
+.AppleDouble
+.LSOverride
+npm-debug.log*
+
+backend/.venv
+backend/app/__pycache__
+backend/app/*.pyc

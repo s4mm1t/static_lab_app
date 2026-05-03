@@ -1,12 +1,15 @@
 {
-  "name": "frontend",
+  "name": "trackfoodai-app",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "dev": "node node_modules/next/dist/bin/next dev --webpack",
+    "build": "node node_modules/next/dist/bin/next build",
+    "start": "node node_modules/next/dist/bin/next start",
+    "lint": "node node_modules/eslint/bin/eslint.js",
+    "backend:install": "python3 -m venv backend/.venv && backend/.venv/bin/python -m pip install -r backend/requirements.txt",
+    "backend:dev": "cd backend && .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000",
+    "backend:test": "cd backend && .venv/bin/python -m pytest"
   },
   "dependencies": {
     "next": "16.2.4",

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" role="img" aria-label="TrackFood AI icon">
+  <rect width="180" height="180" rx="40" fill="#101010"/>
+  <circle cx="90" cy="90" r="54" fill="#f5f5f7"/>
+  <path d="M58 74h64" stroke="#101010" stroke-width="13" stroke-linecap="round"/>
+  <path d="M90 74v48" stroke="#2bb673" stroke-width="13" stroke-linecap="round"/>
+  <circle cx="90" cy="122" r="8" fill="#4f86f7"/>
+</svg>

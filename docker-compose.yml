@@ -1,0 +1,91 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: trackfoodai-db
+    environment:
+      POSTGRES_DB: trackfoodai
+      POSTGRES_USER: trackfoodai
+      POSTGRES_PASSWORD: trackfoodai
+    ports:
+      - "5432:5432"
+    volumes:
+      - trackfoodai-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trackfoodai -d trackfoodai"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+    restart: unless-stopped
+
+  planner_db:
+    image: postgres:16-alpine
+    container_name: trackfoodai-planner-db
+    environment:
+      POSTGRES_DB: trackfoodai_planner
+      POSTGRES_USER: trackfoodai
+      POSTGRES_PASSWORD: trackfoodai
+    ports:
+      - "5433:5432"
+    volumes:
+      - trackfoodai-planner-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trackfoodai -d trackfoodai_planner"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    container_name: trackfoodai-backend
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql://trackfoodai:trackfoodai@db:5432/trackfoodai
+      PLANNER_DATABASE_URL: postgresql://trackfoodai:trackfoodai@planner_db:5432/trackfoodai_planner
+      EXTERNAL_PRODUCTS_SQLITE: /external-db/Combined.sqlite
+      SECRET_KEY: trackfoodai-local-docker-secret-change-me
+      ALLOWED_HOSTS: "localhost,127.0.0.1,testserver,backend,frontend,*.orb.local,192.168.18.40,192.168.18.87"
+      CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000,http://192.168.18.40:3000,http://192.168.18.87:3000"
+    volumes:
+      - "${TRACKFOODAI_PRODUCT_DB_DIR:-/Volumes/NEYKA SSD/бд для сайта/newbd/Combine (full)}:/external-db:ro"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      planner_db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_API_URL: ""
+    container_name: trackfoodai-frontend
+    environment:
+      NEXT_PUBLIC_API_URL: ""
+      HOSTNAME: "0.0.0.0"
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  trackfoodai-postgres:
+  trackfoodai-planner-postgres:
