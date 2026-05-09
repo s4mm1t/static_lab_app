@@ -7,10 +7,11 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 type Theme = "light" | "dark";
 type ActivityLevel = "light" | "balanced" | "active";
 type AuthMode = "register" | "login";
-type TabId = "home" | "diary" | "search" | "calendar" | "insights" | "profile";
+type TabId = "home" | "diary" | "search" | "calendar" | "assistant" | "insights" | "profile";
 type MealSlot = "breakfast" | "lunch" | "dinner" | "snack";
 type CalendarEventType = "meal" | "training" | "task" | "note";
 type CalendarEventStatus = "planned" | "done" | "skipped";
+type UserRole = "user" | "admin";
 
 type FoodItem = {
   id: string;
@@ -37,8 +38,11 @@ type PublicProfile = {
   id: string;
   name: string;
   email: string;
+  phone_number?: string | null;
+  avatar_data_url?: string | null;
   calorie_goal: number;
   activity_level: ActivityLevel;
+  role?: UserRole;
   created_at: string;
 };
 
@@ -87,10 +91,53 @@ type AuthResponse = {
   profile: PublicProfile;
 };
 
+type AssistantMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  provider: string;
+  model: string;
+  created_at: string;
+};
+
+type SecurityEvent = {
+  id: string;
+  action: string;
+  severity: "info" | "warning" | "critical";
+  ip: string;
+  path: string;
+  details: string;
+  created_at: string;
+};
+
+type SecuritySummary = {
+  events: number;
+  warnings: number;
+  critical: number;
+  blocked_intruders: number;
+  recent_events: SecurityEvent[];
+};
+
+type IntruderFlag = {
+  id: string;
+  ip: string;
+  fingerprint: string;
+  attempts: number;
+  is_blocked: boolean;
+  last_seen_at: string;
+};
+
 type AuthFormState = {
   name: string;
   email: string;
   password: string;
+  calorieGoal: string;
+  activityLevel: ActivityLevel;
+};
+
+type ProfileFormState = {
+  name: string;
+  phoneNumber: string;
   calorieGoal: string;
   activityLevel: ActivityLevel;
 };
@@ -102,6 +149,7 @@ const tabs: { id: TabId; label: string; short: string }[] = [
   { id: "diary", label: "Diary", short: "Diary" },
   { id: "search", label: "Add food", short: "Add" },
   { id: "calendar", label: "Calendar", short: "Plan" },
+  { id: "assistant", label: "Assistant", short: "AI" },
   { id: "insights", label: "Insights", short: "Stats" },
   { id: "profile", label: "Profile", short: "Me" },
 ];
@@ -192,7 +240,14 @@ function formatKcal(value: number) {
 }
 
 function dateKey(date: Date) {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function dateKeyFromIso(value: string) {
+  return dateKey(new Date(value));
 }
 
 function addDays(date: Date, days: number) {
@@ -232,6 +287,49 @@ function safeInitials(value: string) {
     .slice(0, 2)
     .map((word) => word[0]?.toUpperCase())
     .join("");
+}
+
+function maskEmail(email: string) {
+  const [name, domain] = email.split("@");
+  if (!domain) {
+    return email;
+  }
+  const visible = name.slice(0, Math.min(2, name.length));
+  return `${visible}${"*".repeat(Math.max(name.length - visible.length, 3))}@${domain}`;
+}
+
+function profileFirstName(profile: PublicProfile | null) {
+  return profile?.name.trim().split(/\s+/)[0] || "You";
+}
+
+function resizeAvatar(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read avatar file"));
+    reader.onload = () => {
+      const image = new window.Image();
+      image.onerror = () => reject(new Error("Could not load avatar image"));
+      image.onload = () => {
+        const canvas = document.createElement("canvas");
+        const size = 320;
+        canvas.width = size;
+        canvas.height = size;
+        const context = canvas.getContext("2d");
+        if (!context) {
+          reject(new Error("Could not prepare avatar"));
+          return;
+        }
+
+        const scale = Math.max(size / image.width, size / image.height);
+        const width = image.width * scale;
+        const height = image.height * scale;
+        context.drawImage(image, (size - width) / 2, (size - height) / 2, width, height);
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
+      };
+      image.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 async function apiRequest<T>(
@@ -307,6 +405,29 @@ function FoodVisual({ food, size = "md" }: { food: FoodItem; size?: "sm" | "md" 
   );
 }
 
+function BrandMark({ size = "sm" }: { size?: "sm" | "md" }) {
+  return <span className={`brand-mark ${size}`}>TF</span>;
+}
+
+function AvatarBubble({
+  profile,
+  size = "md",
+}: {
+  profile: PublicProfile | null;
+  size?: "sm" | "md" | "lg";
+}) {
+  return (
+    <span className={`avatar-bubble ${size}`}>
+      {profile?.avatar_data_url ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={profile.avatar_data_url} alt="" />
+      ) : (
+        <span>{safeInitials(profile?.name || "TrackFood") || "TF"}</span>
+      )}
+    </span>
+  );
+}
+
 function ThemeToggle({
   theme,
   onChange,
@@ -328,6 +449,30 @@ function ThemeToggle({
         </button>
       ))}
     </div>
+  );
+}
+
+function AccountChip({
+  profile,
+  calories,
+  goal,
+  onClick,
+}: {
+  profile: PublicProfile | null;
+  calories: number;
+  goal: number;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" className="account-chip" onClick={onClick}>
+      <AvatarBubble profile={profile} size="sm" />
+      <span>
+        <strong>{profileFirstName(profile)}</strong>
+        <small>
+          {formatKcal(calories)} / {formatKcal(goal)}
+        </small>
+      </span>
+    </button>
   );
 }
 
@@ -483,7 +628,7 @@ function PlannerCalendar({
   const monthStart = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
   const gridStart = addDays(monthStart, -monthStart.getDay());
   const selectedEvents = events.filter((event) => event.scheduled_date === selectedDate);
-  const selectedMeals = meals.filter((meal) => meal.logged_at.slice(0, 10) === selectedDate);
+  const selectedMeals = meals.filter((meal) => dateKeyFromIso(meal.logged_at) === selectedDate);
 
   return (
     <section className="panel calendar-panel">
@@ -513,7 +658,7 @@ function PlannerCalendar({
           const day = addDays(gridStart, index);
           const key = dateKey(day);
           const dayEvents = events.filter((event) => event.scheduled_date === key);
-          const dayMeals = meals.filter((meal) => meal.logged_at.slice(0, 10) === key);
+          const dayMeals = meals.filter((meal) => dateKeyFromIso(meal.logged_at) === key);
           const isMuted = day.getMonth() !== monthDate.getMonth();
           const isSelected = key === selectedDate;
 
@@ -856,6 +1001,12 @@ export default function TrackFoodApp() {
   });
   const [barcodeText, setBarcodeText] = useState("");
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([]);
+  const [assistantText, setAssistantText] = useState("");
+  const [isAssistantLoading, setIsAssistantLoading] = useState(false);
+  const [assistantError, setAssistantError] = useState("");
+  const [securitySummary, setSecuritySummary] = useState<SecuritySummary | null>(null);
+  const [intruders, setIntruders] = useState<IntruderFlag[]>([]);
   const [scrollDepth, setScrollDepth] = useState(0);
   const [authForm, setAuthForm] = useState({
     name: "",
@@ -863,6 +1014,12 @@ export default function TrackFoodApp() {
     password: "",
     calorieGoal: "1850",
     activityLevel: "balanced" as ActivityLevel,
+  });
+  const [profileForm, setProfileForm] = useState<ProfileFormState>({
+    name: "",
+    phoneNumber: "",
+    calorieGoal: "1850",
+    activityLevel: "balanced",
   });
 
   const parsedGoal = Number(authForm.calorieGoal) || 1850;
@@ -902,6 +1059,24 @@ export default function TrackFoodApp() {
       .slice(0, 6);
   }, [meals]);
 
+  const selectedDayEvents = useMemo(
+    () => calendarEvents.filter((event) => event.scheduled_date === selectedDate),
+    [calendarEvents, selectedDate],
+  );
+  const weekActivity = useMemo(() => {
+    const today = new Date();
+    return Array.from({ length: 7 }).map((_, index) => {
+      const day = addDays(today, index - 6);
+      const key = dateKey(day);
+      const dayMeals = meals.filter((meal) => dateKeyFromIso(meal.logged_at) === key);
+      return {
+        key,
+        label: shortWeekday(day).slice(0, 2),
+        calories: dayMeals.reduce((sum, meal) => sum + meal.calories, 0),
+      };
+    });
+  }, [meals]);
+
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       const savedTheme = window.localStorage.getItem("trackfood-theme") as Theme | null;
@@ -921,6 +1096,12 @@ export default function TrackFoodApp() {
           calorieGoal: String(savedProfile.calorie_goal),
           activityLevel: savedProfile.activity_level,
         }));
+        setProfileForm({
+          name: savedProfile.name,
+          phoneNumber: savedProfile.phone_number || "",
+          calorieGoal: String(savedProfile.calorie_goal),
+          activityLevel: savedProfile.activity_level,
+        });
       }
 
       void apiRequest<FoodItem[]>(`/api/v1/foods?limit=${PRODUCT_PAGE_SIZE}`)
@@ -936,6 +1117,19 @@ export default function TrackFoodApp() {
         });
 
       if (savedToken) {
+        void apiRequest<PublicProfile>("/api/v1/profile", {}, savedToken)
+          .then((remoteProfile) => {
+            setProfile(remoteProfile);
+            setProfileForm({
+              name: remoteProfile.name,
+              phoneNumber: remoteProfile.phone_number || "",
+              calorieGoal: String(remoteProfile.calorie_goal),
+              activityLevel: remoteProfile.activity_level,
+            });
+            window.localStorage.setItem("trackfood-profile", JSON.stringify(remoteProfile));
+            void refreshSecurity(savedToken, remoteProfile);
+          })
+          .catch((error) => setStatus(getErrorMessage(error)));
         void apiRequest<MealLog[]>("/api/v1/meals", {}, savedToken)
           .then((remoteMeals) => {
             setMeals(remoteMeals);
@@ -952,6 +1146,7 @@ export default function TrackFoodApp() {
         )
           .then(setCalendarEvents)
           .catch((error) => setStatus(getErrorMessage(error)));
+        void refreshAssistant(savedToken);
       } else {
         setStatus("Create account to sync");
       }
@@ -959,6 +1154,8 @@ export default function TrackFoodApp() {
     });
 
     return () => window.cancelAnimationFrame(frame);
+    // Initial hydration should run once; refresh helpers are called with captured saved token/profile.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -1043,6 +1240,41 @@ export default function TrackFoodApp() {
         nextToken,
       );
       setCalendarEvents(events);
+    } catch (error) {
+      setStatus(getErrorMessage(error));
+    }
+  }
+
+  async function refreshAssistant(nextToken = token) {
+    if (!nextToken) {
+      setAssistantMessages([]);
+      return;
+    }
+    try {
+      const messages = await apiRequest<AssistantMessage[]>(
+        "/api/v1/assistant/messages",
+        {},
+        nextToken,
+      );
+      setAssistantMessages(messages);
+    } catch (error) {
+      setAssistantError(getErrorMessage(error));
+    }
+  }
+
+  async function refreshSecurity(nextToken = token, nextProfile = profile) {
+    if (!nextToken || nextProfile?.role !== "admin") {
+      setSecuritySummary(null);
+      setIntruders([]);
+      return;
+    }
+    try {
+      const [summary, flagged] = await Promise.all([
+        apiRequest<SecuritySummary>("/api/v1/security/summary", {}, nextToken),
+        apiRequest<IntruderFlag[]>("/api/v1/security/intruders", {}, nextToken),
+      ]);
+      setSecuritySummary(summary);
+      setIntruders(flagged);
     } catch (error) {
       setStatus(getErrorMessage(error));
     }
@@ -1143,12 +1375,20 @@ export default function TrackFoodApp() {
       });
       setToken(payload.token);
       setProfile(payload.profile);
+      setProfileForm({
+        name: payload.profile.name,
+        phoneNumber: payload.profile.phone_number || "",
+        calorieGoal: String(payload.profile.calorie_goal),
+        activityLevel: payload.profile.activity_level,
+      });
       setAuthForm((current) => ({ ...current, password: "" }));
       window.localStorage.setItem("trackfood-token", payload.token);
       window.localStorage.setItem("trackfood-profile", JSON.stringify(payload.profile));
       setStatus(authMode === "register" ? "Account created" : "Logged in");
       await refreshMeals(payload.token);
       await refreshCalendar(payload.token);
+      await refreshAssistant(payload.token);
+      await refreshSecurity(payload.token, payload.profile);
       navigate("home");
     } catch (error) {
       setStatus(getErrorMessage(error));
@@ -1160,9 +1400,69 @@ export default function TrackFoodApp() {
     setProfile(null);
     setMeals([]);
     setCalendarEvents([]);
+    setAssistantMessages([]);
+    setSecuritySummary(null);
+    setIntruders([]);
     window.localStorage.removeItem("trackfood-token");
     window.localStorage.removeItem("trackfood-profile");
     setStatus("Logged out");
+  }
+
+  async function saveProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token) {
+      return;
+    }
+
+    try {
+      const updated = await apiRequest<PublicProfile>(
+        "/api/v1/profile",
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            name: profileForm.name.trim(),
+            phone_number: profileForm.phoneNumber.trim() || null,
+            calorie_goal: clamp(Number(profileForm.calorieGoal) || 1850, 1000, 6000),
+            activity_level: profileForm.activityLevel,
+          }),
+        },
+        token,
+      );
+      setProfile(updated);
+      setProfileForm({
+        name: updated.name,
+        phoneNumber: updated.phone_number || "",
+        calorieGoal: String(updated.calorie_goal),
+        activityLevel: updated.activity_level,
+      });
+      window.localStorage.setItem("trackfood-profile", JSON.stringify(updated));
+      setStatus("Profile saved");
+    } catch (error) {
+      setStatus(getErrorMessage(error));
+    }
+  }
+
+  async function saveAvatar(file: File | undefined) {
+    if (!file || !token) {
+      return;
+    }
+
+    try {
+      const avatar_data_url = await resizeAvatar(file);
+      const updated = await apiRequest<PublicProfile>(
+        "/api/v1/profile",
+        {
+          method: "PATCH",
+          body: JSON.stringify({ avatar_data_url }),
+        },
+        token,
+      );
+      setProfile(updated);
+      window.localStorage.setItem("trackfood-profile", JSON.stringify(updated));
+      setStatus("Avatar updated");
+    } catch (error) {
+      setStatus(getErrorMessage(error));
+    }
   }
 
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
@@ -1295,6 +1595,64 @@ export default function TrackFoodApp() {
     }
   }
 
+  async function handleAssistantSubmit(event?: FormEvent<HTMLFormElement>, forcedMessage?: string) {
+    event?.preventDefault();
+    const message = (forcedMessage ?? assistantText).trim();
+    if (!message || !token || isAssistantLoading) {
+      return;
+    }
+
+    const localUserMessage: AssistantMessage = {
+      id: `local-${Date.now()}`,
+      role: "user",
+      content: message,
+      provider: "local",
+      model: "pending",
+      created_at: new Date().toISOString(),
+    };
+
+    setAssistantMessages((current) => [...current, localUserMessage]);
+    setAssistantText("");
+    setAssistantError("");
+    setIsAssistantLoading(true);
+    try {
+      const reply = await apiRequest<AssistantMessage>(
+        "/api/v1/assistant/messages",
+        {
+          method: "POST",
+          body: JSON.stringify({ message }),
+        },
+        token,
+      );
+      setAssistantMessages((current) => [...current, reply]);
+      setStatus("Assistant replied");
+    } catch (error) {
+      setAssistantError(getErrorMessage(error));
+      setAssistantMessages((current) =>
+        current.filter((item) => item.id !== localUserMessage.id),
+      );
+    } finally {
+      setIsAssistantLoading(false);
+    }
+  }
+
+  async function unblockIntruder(intruderId: string) {
+    if (!token || profile?.role !== "admin") {
+      return;
+    }
+    try {
+      await apiRequest<IntruderFlag>(
+        `/api/v1/security/intruders/${intruderId}/unblock`,
+        { method: "POST" },
+        token,
+      );
+      await refreshSecurity(token, profile);
+      setStatus("Intruder unblocked");
+    } catch (error) {
+      setStatus(getErrorMessage(error));
+    }
+  }
+
   if (isHydrated && (!token || !profile)) {
     return (
       <GuestPreview
@@ -1322,8 +1680,15 @@ export default function TrackFoodApp() {
       </div>
       <aside className="rail">
         <div className="rail-head">
-          <a className="brand" href="#home" onClick={() => navigate("home")}>
-            <span>TF</span>
+          <a
+            className="brand"
+            href="#home"
+            onClick={(event) => {
+              event.preventDefault();
+              navigate("home");
+            }}
+          >
+            <BrandMark size="sm" />
             <strong>TrackFood AI</strong>
           </a>
           <button
@@ -1335,10 +1700,6 @@ export default function TrackFoodApp() {
             {isRailOpen ? "‹" : "›"}
           </button>
         </div>
-        <a className="brand rail-mini-brand" href="#home" onClick={() => navigate("home")}>
-          <span>TF</span>
-          <strong>TrackFood AI</strong>
-        </a>
         <nav aria-label="Primary navigation">
           {tabs.map((tab) => (
             <button
@@ -1352,19 +1713,35 @@ export default function TrackFoodApp() {
             </button>
           ))}
         </nav>
-        <ThemeToggle theme={theme} onChange={setTheme} />
+        <button type="button" className="rail-account" onClick={() => navigate("profile")}>
+          <AvatarBubble profile={profile} size="sm" />
+          <span>
+            <strong>{profileFirstName(profile)}</strong>
+            <small>{formatKcal(totals.calories)} today</small>
+          </span>
+        </button>
       </aside>
 
       <div className="app-content">
         <header className="topbar">
-          <a className="mobile-brand" href="#home" onClick={() => navigate("home")}>
-            <span>TF</span>
+          <a
+            className="mobile-brand"
+            href="#home"
+            onClick={(event) => {
+              event.preventDefault();
+              navigate("home");
+            }}
+          >
+            <BrandMark size="sm" />
             <strong>{tabs.find((tab) => tab.id === activeTab)?.label ?? "TrackFood AI"}</strong>
           </a>
           <div className="topbar-actions">
-            <span className={token ? "sync-pill online" : "sync-pill"}>
-              {token ? "Account synced" : status}
-            </span>
+            <AccountChip
+              profile={profile}
+              calories={totals.calories}
+              goal={goal}
+              onClick={() => navigate("profile")}
+            />
             <ThemeToggle theme={theme} onChange={setTheme} />
           </div>
         </header>
@@ -1794,12 +2171,132 @@ export default function TrackFoodApp() {
         </section>
         )}
 
+        {activeTab === "assistant" && (
+        <section id="assistant" className="assistant-grid app-page">
+          <section className="panel assistant-panel">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">TrackFood AI</span>
+                <h2>Assistant</h2>
+              </div>
+              <button type="button" className="secondary-button" onClick={() => void refreshAssistant()}>
+                Sync
+              </button>
+            </div>
+
+            <div className="assistant-thread" aria-live="polite">
+              {assistantMessages.length === 0 && !assistantError && (
+                <div className="assistant-empty">
+                  <strong>Ask about meals, plans, or your day.</strong>
+                  <span>Gemini runs through the backend, so the API key never touches the browser.</span>
+                </div>
+              )}
+              {assistantMessages.map((message) => (
+                <article key={message.id} className={`chat-bubble ${message.role}`}>
+                  <span>{message.role === "assistant" ? "AI" : "You"}</span>
+                  <p>{message.content}</p>
+                </article>
+              ))}
+              {isAssistantLoading && (
+                <article className="chat-bubble assistant is-loading">
+                  <span>AI</span>
+                  <p>Thinking through your food log...</p>
+                </article>
+              )}
+              {assistantError && (
+                <div className="assistant-error">
+                  <strong>{assistantError}</strong>
+                  <span>Add GEMINI_API_KEY in the backend environment to enable live chat.</span>
+                </div>
+              )}
+            </div>
+
+            <div className="prompt-row">
+              {[
+                "Estimate this meal",
+                "Plan my day",
+                "What should I eat next?",
+              ].map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => void handleAssistantSubmit(undefined, prompt)}
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+
+            <form className="assistant-form" onSubmit={(event) => void handleAssistantSubmit(event)}>
+              <textarea
+                value={assistantText}
+                onChange={(event) => setAssistantText(event.target.value)}
+                placeholder="Ask for a meal idea, shopping choice, or calendar plan..."
+              />
+              <button type="submit" className="primary-button" disabled={isAssistantLoading}>
+                Send
+              </button>
+            </form>
+          </section>
+
+          <aside className="panel assistant-side">
+            <span className="eyebrow">Context</span>
+            <h2>{formatKcal(totals.calories)}</h2>
+            <div className="stats-grid">
+              <StatTile label="Left" value={formatKcal(remaining)} detail="today" />
+              <StatTile label="Meals" value={String(meals.length)} detail="logged" />
+              <StatTile label="Plans" value={String(selectedDayEvents.length)} detail={selectedDate} />
+            </div>
+            <p>
+              The assistant can help with food choices and planning, but medical decisions
+              still belong with professionals.
+            </p>
+          </aside>
+        </section>
+        )}
+
         {activeTab === "insights" && (
         <section id="insights" className="insights-grid">
+          <section className="panel insights-hero">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">Stats</span>
+                <h2>Today&apos;s signal</h2>
+              </div>
+              <strong>{progress}%</strong>
+            </div>
+            <div className="insight-rings">
+              <div
+                className="calorie-orbit"
+                style={{
+                  background: `conic-gradient(var(--accent) ${Math.min(
+                    progress,
+                    100,
+                  )}%, var(--line-soft) 0)`,
+                }}
+              >
+                <span>{formatKcal(totals.calories)}</span>
+              </div>
+              <div className="macro-stack">
+                <MacroLine label="Protein" value={totals.protein} goal={140} color="#2bb673" />
+                <MacroLine label="Carbs" value={totals.carbs} goal={240} color="#4f86f7" />
+                <MacroLine label="Fat" value={totals.fat} goal={70} color="#ff795e" />
+              </div>
+            </div>
+            <div className="week-bars" aria-label="Weekly calories">
+              {weekActivity.map((day) => (
+                <span key={day.key}>
+                  <i style={{ height: `${clamp((day.calories / Math.max(goal, 1)) * 100, 6, 100)}%` }} />
+                  <small>{day.label}</small>
+                </span>
+              ))}
+            </div>
+          </section>
+
           <section className="panel estimate-panel">
             <div className="panel-heading">
               <div>
-                <span className="eyebrow">Smart assistant</span>
+                <span className="eyebrow">Nutrition match</span>
                 <h2>Describe a meal</h2>
               </div>
             </div>
@@ -1870,18 +2367,18 @@ export default function TrackFoodApp() {
             </form>
           </section>
 
-          <section className="panel streak-panel">
-            <span className="eyebrow">Progress</span>
-            <h2>Built for daily use</h2>
-            <div className="calendar-dots">
-              {Array.from({ length: 21 }).map((_, index) => (
-                <span key={index} className={index < Math.min(meals.length + 6, 21) ? "filled" : ""} />
-              ))}
-            </div>
+          <section className="panel scanner-summary">
+            <span className="eyebrow">Scanner status</span>
+            <h2>{photoPreview ? "Photo ready" : barcodeText ? "Barcode ready" : "Ready to scan"}</h2>
             <p>
-              The skeleton now has the core loops: account, searchable food DB, serving
-              confirmation, diary save, delete, and persistent Postgres data.
+              Use barcode search for products from your database or photo trial for a quick
+              nutrition estimate.
             </p>
+            <div className="stats-grid">
+              <StatTile label="Products" value={String(foods.length)} detail="loaded" />
+              <StatTile label="Estimate" value={estimate ? estimate.label : "None"} detail="latest" />
+              <StatTile label="Source" value="DB" detail="local" />
+            </div>
           </section>
         </section>
         )}
@@ -1889,125 +2386,160 @@ export default function TrackFoodApp() {
         {activeTab === "profile" && (
         <section id="profile" className="profile-grid">
           <section className="panel profile-panel">
-            <div className="panel-heading">
-              <div>
-                <span className="eyebrow">Account</span>
-                <h2>{profile ? profile.name : "Create your profile"}</h2>
+            <div className="profile-hero">
+              <label className="avatar-editor">
+                <AvatarBubble profile={profile} size="lg" />
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(event) => void saveAvatar(event.target.files?.[0])}
+                />
+                <span>Change avatar</span>
+              </label>
+              <div className="profile-title">
+                <span className="eyebrow">Member profile</span>
+                <h2>{profile?.name}</h2>
+                <p>{maskEmail(profile?.email || "")}</p>
               </div>
-              {profile && (
-                <button type="button" className="secondary-button" onClick={logout}>
-                  Log out
-                </button>
-              )}
+              <button type="button" className="secondary-button" onClick={logout}>
+                Log out
+              </button>
             </div>
 
-            {profile && (
-              <div className="profile-summary">
-                <StatTile label="Email" value={profile.email} detail="saved in DB" />
-                <StatTile
-                  label="Routine"
-                  value={activityLabels[profile.activity_level]}
-                  detail="activity"
-                />
-                <StatTile label="Goal" value={formatKcal(profile.calorie_goal)} detail="daily" />
+            <div className="profile-summary">
+              <StatTile
+                label="Today"
+                value={formatKcal(totals.calories)}
+                detail={`${formatKcal(remaining)} left`}
+              />
+              <StatTile label="Meals" value={String(meals.length)} detail="logged today" />
+              <StatTile label="Plans" value={String(selectedDayEvents.length)} detail={selectedDate} />
+              <StatTile
+                label="Routine"
+                value={activityLabels[profile?.activity_level || "balanced"]}
+                detail="activity"
+              />
+            </div>
+
+            <div className="secure-card">
+              <div>
+                <span className="eyebrow">Private account</span>
+                <strong>{profile?.phone_number ? "Phone linked" : "Phone not linked"}</strong>
+                <small>{profile?.phone_number || "Add a phone number for a more complete profile."}</small>
               </div>
+              <div>
+                <span className="eyebrow">Email</span>
+                <strong>{maskEmail(profile?.email || "")}</strong>
+                <small>Hidden on profile cards</small>
+              </div>
+            </div>
+
+            {profile?.role === "admin" && (
+              <section className="security-admin">
+                <div className="panel-heading">
+                  <div>
+                    <span className="eyebrow">Security admin</span>
+                    <h2>Backend shield</h2>
+                  </div>
+                  <button type="button" className="secondary-button" onClick={() => void refreshSecurity()}>
+                    Refresh
+                  </button>
+                </div>
+                <div className="profile-summary">
+                  <StatTile label="Events" value={String(securitySummary?.events ?? 0)} detail="tracked" />
+                  <StatTile label="Warnings" value={String(securitySummary?.warnings ?? 0)} detail="recent" />
+                  <StatTile label="Critical" value={String(securitySummary?.critical ?? 0)} detail="blocked" />
+                  <StatTile label="Intruders" value={String(securitySummary?.blocked_intruders ?? 0)} detail="blocked" />
+                </div>
+                <div className="security-list">
+                  {(securitySummary?.recent_events ?? []).slice(0, 5).map((event) => (
+                    <article key={event.id}>
+                      <span className={`severity-dot ${event.severity}`} />
+                      <div>
+                        <strong>{event.action}</strong>
+                        <small>{event.ip} - {event.path}</small>
+                      </div>
+                    </article>
+                  ))}
+                  {intruders.filter((intruder) => intruder.is_blocked).slice(0, 4).map((intruder) => (
+                    <article key={intruder.id}>
+                      <span className="severity-dot critical" />
+                      <div>
+                        <strong>{intruder.ip}</strong>
+                        <small>{intruder.attempts} attempts - {intruder.fingerprint}</small>
+                      </div>
+                      <button type="button" onClick={() => void unblockIntruder(intruder.id)}>
+                        Unblock
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              </section>
             )}
 
-            <div className="auth-tabs" aria-label="Authentication mode">
-              {(["register", "login"] as AuthMode[]).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  className={authMode === mode ? "is-active" : ""}
-                  onClick={() => setAuthMode(mode)}
-                >
-                  {mode === "register" ? "Register" : "Login"}
-                </button>
-              ))}
-            </div>
-
-            <form className="auth-form" onSubmit={handleAuth}>
-              {authMode === "register" && (
-                <label>
-                  Name
-                  <input
-                    required
-                    minLength={2}
-                    maxLength={80}
-                    value={authForm.name}
-                    onChange={(event) =>
-                      setAuthForm((current) => ({ ...current, name: event.target.value }))
-                    }
-                    placeholder="Nika Stone"
-                  />
-                </label>
-              )}
+            <form className="profile-edit-form" onSubmit={saveProfile}>
               <label>
-                Email
+                Display name
                 <input
                   required
-                  type="email"
-                  value={authForm.email}
+                  minLength={2}
+                  maxLength={80}
+                  value={profileForm.name}
                   onChange={(event) =>
-                    setAuthForm((current) => ({ ...current, email: event.target.value }))
+                    setProfileForm((current) => ({ ...current, name: event.target.value }))
                   }
-                  placeholder="nika@trackfood.ai"
                 />
               </label>
               <label>
-                Password
+                Phone
                 <input
-                  required
-                  type="password"
-                  minLength={8}
-                  value={authForm.password}
+                  value={profileForm.phoneNumber}
                   onChange={(event) =>
-                    setAuthForm((current) => ({
+                    setProfileForm((current) => ({
                       ...current,
-                      password: event.target.value,
+                      phoneNumber: event.target.value,
                     }))
                   }
-                  placeholder="8+ characters"
+                  inputMode="tel"
+                  placeholder="+34 600 000 000"
                 />
               </label>
-              {authMode === "register" && (
-                <div className="form-pair">
-                  <label>
-                    Daily goal
-                    <input
-                      required
-                      type="number"
-                      min={1000}
-                      max={6000}
-                      value={authForm.calorieGoal}
-                      onChange={(event) =>
-                        setAuthForm((current) => ({
-                          ...current,
-                          calorieGoal: event.target.value,
-                        }))
-                      }
-                    />
-                  </label>
-                  <label>
-                    Activity
-                    <select
-                      value={authForm.activityLevel}
-                      onChange={(event) =>
-                        setAuthForm((current) => ({
-                          ...current,
-                          activityLevel: event.target.value as ActivityLevel,
-                        }))
-                      }
-                    >
-                      <option value="light">Light</option>
-                      <option value="balanced">Balanced</option>
-                      <option value="active">Active</option>
-                    </select>
-                  </label>
-                </div>
-              )}
+              <div className="form-pair">
+                <label>
+                  Daily goal
+                  <input
+                    required
+                    type="number"
+                    min={1000}
+                    max={6000}
+                    value={profileForm.calorieGoal}
+                    onChange={(event) =>
+                      setProfileForm((current) => ({
+                        ...current,
+                        calorieGoal: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  Activity
+                  <select
+                    value={profileForm.activityLevel}
+                    onChange={(event) =>
+                      setProfileForm((current) => ({
+                        ...current,
+                        activityLevel: event.target.value as ActivityLevel,
+                      }))
+                    }
+                  >
+                    <option value="light">Light</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="active">Active</option>
+                  </select>
+                </label>
+              </div>
               <button type="submit" className="primary-button wide">
-                {authMode === "register" ? "Create account" : "Login"}
+                Save profile
               </button>
             </form>
             <p className="status-text">{status}</p>

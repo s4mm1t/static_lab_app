@@ -14,11 +14,13 @@ import time
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
+import bcrypt
+import httpx
 import jwt
 import psycopg
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from psycopg import errors
 from psycopg.rows import dict_row
 from pydantic import BaseModel, Field, field_validator
@@ -30,6 +32,9 @@ MealType = Literal["Breakfast", "Lunch", "Dinner"]
 MealSlot = Literal["breakfast", "lunch", "dinner", "snack"]
 CalendarEventType = Literal["meal", "training", "task", "note"]
 CalendarEventStatus = Literal["planned", "done", "skipped"]
+UserRole = Literal["user", "admin"]
+SecuritySeverity = Literal["info", "warning", "critical"]
+AssistantRole = Literal["user", "assistant"]
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -44,8 +49,17 @@ USE_MEMORY_PLANNER = USE_MEMORY_STORAGE or PLANNER_DATABASE_URL.startswith("memo
 SECRET_KEY = os.getenv("SECRET_KEY", "trackfoodai-local-dev-secret-change-me")
 JWT_ALGORITHM = "HS256"
 TOKEN_TTL_HOURS = 24 * 14
-MAX_BODY_BYTES = 48_000
+MAX_BODY_BYTES = 320_000
 MAX_REQUESTS_PER_MINUTE = 160
+AUTH_REQUESTS_PER_MINUTE = 24
+INTRUDER_BLOCK_THRESHOLD = 5
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+ADMIN_EMAILS = {
+    email.strip().lower()
+    for email in os.getenv("TRACKFOODAI_ADMIN_EMAILS", "").split(",")
+    if email.strip()
+}
 RATE_BUCKETS: dict[str, deque[float]] = defaultdict(deque)
 EMAIL_PATTERN = re.compile(r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$", re.I)
 DANGEROUS_PATTERNS = [
@@ -85,7 +99,18 @@ def assert_clean(value: str) -> str:
     return cleaned
 
 
-def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
+def assert_chat_clean(value: str) -> str:
+    cleaned = normalize_text(value)
+    if any(pattern.search(cleaned) for pattern in DANGEROUS_PATTERNS[:4]):
+        raise ValueError("Message contains unsafe patterns")
+    return cleaned
+
+
+def role_for_email(email: str) -> UserRole:
+    return "admin" if email.lower() in ADMIN_EMAILS else "user"
+
+
+def hash_password_legacy(password: str, salt: str | None = None) -> tuple[str, str]:
     salt = salt or secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac(
         "sha256",
@@ -96,8 +121,21 @@ def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
     return salt, digest.hex()
 
 
-def verify_password(password: str, salt: str, stored_hash: str) -> bool:
-    _, candidate_hash = hash_password(password, salt)
+def hash_password(password: str) -> tuple[str, str]:
+    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    return "bcrypt", password_hash
+
+
+def verify_password(
+    password: str,
+    salt: str,
+    stored_hash: str,
+    password_scheme: str | None = None,
+) -> bool:
+    if password_scheme == "bcrypt" or stored_hash.startswith("$2"):
+        return bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8"))
+
+    _, candidate_hash = hash_password_legacy(password, salt)
     return hmac.compare_digest(candidate_hash, stored_hash)
 
 
@@ -221,14 +259,50 @@ class PublicProfile(BaseModel):
     id: str
     name: str
     email: str
+    phone_number: str | None = None
+    avatar_data_url: str | None = None
     calorie_goal: int
     activity_level: ActivityLevel
+    role: UserRole = "user"
     created_at: str
 
 
 class AuthResponse(BaseModel):
     token: str
     profile: PublicProfile
+
+
+class ProfileUpdateRequest(BaseModel):
+    name: str | None = Field(None, min_length=2, max_length=80)
+    phone_number: str | None = Field(None, max_length=32)
+    avatar_data_url: str | None = Field(None, max_length=260_000)
+    calorie_goal: int | None = Field(None, ge=1000, le=6000)
+    activity_level: ActivityLevel | None = None
+
+    @field_validator("name", "phone_number")
+    @classmethod
+    def validate_text(cls, value: str | None) -> str | None:
+        return assert_clean(value) if value is not None else None
+
+    @field_validator("phone_number")
+    @classmethod
+    def validate_phone(cls, value: str | None) -> str | None:
+        if value in (None, ""):
+            return None
+        if not re.match(r"^[0-9+()\-\s]{6,32}$", value):
+            raise ValueError("Invalid phone number")
+        return value
+
+    @field_validator("avatar_data_url")
+    @classmethod
+    def validate_avatar(cls, value: str | None) -> str | None:
+        if value in (None, ""):
+            return None
+        if not value.startswith("data:image/"):
+            raise ValueError("Avatar must be an image data URL")
+        if any(pattern.search(value) for pattern in DANGEROUS_PATTERNS[:3]):
+            raise ValueError("Avatar contains unsafe patterns")
+        return value
 
 
 class MealCreateRequest(BaseModel):
@@ -330,6 +404,55 @@ class ProfileStatsResponse(BaseModel):
     meals: list[MealLogResponse]
 
 
+class SecurityEventResponse(BaseModel):
+    id: str
+    action: str
+    severity: SecuritySeverity
+    user_id: str | None
+    ip: str
+    path: str
+    user_agent: str
+    fingerprint: str
+    details: str
+    created_at: str
+
+
+class IntruderFlagResponse(BaseModel):
+    id: str
+    ip: str
+    fingerprint: str
+    attempts: int
+    is_blocked: bool
+    last_seen_at: str
+    blocked_at: str | None
+
+
+class SecuritySummaryResponse(BaseModel):
+    events: int
+    warnings: int
+    critical: int
+    blocked_intruders: int
+    recent_events: list[SecurityEventResponse]
+
+
+class AssistantMessageCreateRequest(BaseModel):
+    message: str = Field(..., min_length=2, max_length=1200)
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, value: str) -> str:
+        return assert_chat_clean(value)
+
+
+class AssistantMessageResponse(BaseModel):
+    id: str
+    role: AssistantRole
+    content: str
+    provider: str
+    model: str
+    created_at: str
+
+
 SEED_FOODS = [
     FoodItem(
         id="chicken-bowl",
@@ -408,6 +531,9 @@ MEMORY_USERS_BY_EMAIL: dict[str, dict[str, Any]] = {}
 MEMORY_USERS_BY_ID: dict[str, dict[str, Any]] = {}
 MEMORY_MEALS_BY_USER: dict[str, list[dict[str, Any]]] = defaultdict(list)
 MEMORY_CALENDAR_BY_USER: dict[str, list[dict[str, Any]]] = defaultdict(list)
+MEMORY_SECURITY_EVENTS: list[dict[str, Any]] = []
+MEMORY_INTRUDERS: dict[str, dict[str, Any]] = {}
+MEMORY_AI_MESSAGES_BY_USER: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
 
 def connect() -> psycopg.Connection[Any]:
@@ -452,6 +578,9 @@ def init_storage() -> None:
         MEMORY_USERS_BY_ID.clear()
         MEMORY_MEALS_BY_USER.clear()
         MEMORY_CALENDAR_BY_USER.clear()
+        MEMORY_SECURITY_EVENTS.clear()
+        MEMORY_INTRUDERS.clear()
+        MEMORY_AI_MESSAGES_BY_USER.clear()
         return
 
     with connect() as conn:
@@ -462,14 +591,27 @@ def init_storage() -> None:
                     id UUID PRIMARY KEY,
                     name TEXT NOT NULL,
                     email TEXT NOT NULL UNIQUE,
+                    phone_number TEXT,
+                    avatar_data_url TEXT,
                     password_hash TEXT NOT NULL,
                     salt TEXT NOT NULL,
+                    password_scheme TEXT NOT NULL DEFAULT 'pbkdf2',
                     calorie_goal INTEGER NOT NULL CHECK (calorie_goal BETWEEN 1000 AND 6000),
                     activity_level TEXT NOT NULL CHECK (activity_level IN ('light', 'balanced', 'active')),
+                    role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
                 """
             )
+            for column in [
+                "phone_number TEXT",
+                "avatar_data_url TEXT",
+                "password_scheme TEXT NOT NULL DEFAULT 'pbkdf2'",
+                "role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin'))",
+            ]:
+                cur.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {column}")
+            for admin_email in ADMIN_EMAILS:
+                cur.execute("UPDATE users SET role = 'admin' WHERE email = %s", (admin_email,))
             cur.execute(f"CREATE TABLE IF NOT EXISTS foods ({food_columns_sql()})")
             for column in [
                 "brand TEXT",
@@ -511,6 +653,61 @@ def init_storage() -> None:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_foods_source ON foods (source, store)")
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS meal_logs_user_logged_idx ON meal_logs (user_id, logged_at DESC)"
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS security_events (
+                    id UUID PRIMARY KEY,
+                    action TEXT NOT NULL,
+                    severity TEXT NOT NULL CHECK (severity IN ('info', 'warning', 'critical')),
+                    user_id UUID,
+                    ip TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    user_agent TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    details TEXT NOT NULL DEFAULT '',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS security_events_created_idx
+                ON security_events (created_at DESC)
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS intruder_flags (
+                    id UUID PRIMARY KEY,
+                    ip TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 1,
+                    is_blocked BOOLEAN NOT NULL DEFAULT FALSE,
+                    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    blocked_at TIMESTAMPTZ,
+                    UNIQUE (ip, fingerprint)
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_messages (
+                    id UUID PRIMARY KEY,
+                    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+                    content TEXT NOT NULL,
+                    provider TEXT NOT NULL DEFAULT 'gemini',
+                    model TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS ai_messages_user_created_idx
+                ON ai_messages (user_id, created_at)
+                """
             )
 
             for food in SEED_FOODS:
@@ -795,8 +992,11 @@ def to_public_profile(user: dict[str, Any]) -> PublicProfile:
         id=str(user["id"]),
         name=user["name"],
         email=user["email"],
+        phone_number=user.get("phone_number"),
+        avatar_data_url=user.get("avatar_data_url"),
         calorie_goal=int(user["calorie_goal"]),
         activity_level=user["activity_level"],
+        role=user.get("role") or role_for_email(user["email"]),
         created_at=isoformat(user["created_at"]),
     )
 
@@ -809,6 +1009,7 @@ def create_user(payload: RegisterRequest) -> dict[str, Any]:
         )
 
     salt, password_hash = hash_password(payload.password)
+    role = role_for_email(payload.email)
     user_id = str(uuid4())
 
     if USE_MEMORY_STORAGE:
@@ -816,10 +1017,14 @@ def create_user(payload: RegisterRequest) -> dict[str, Any]:
             "id": user_id,
             "name": payload.name,
             "email": payload.email,
+            "phone_number": None,
+            "avatar_data_url": None,
             "password_hash": password_hash,
             "salt": salt,
+            "password_scheme": "bcrypt",
             "calorie_goal": payload.calorie_goal,
             "activity_level": payload.activity_level,
+            "role": role,
             "created_at": now_iso(),
         }
         MEMORY_USERS_BY_EMAIL[user["email"]] = user
@@ -832,20 +1037,24 @@ def create_user(payload: RegisterRequest) -> dict[str, Any]:
                 cur.execute(
                     """
                     INSERT INTO users (
-                        id, name, email, password_hash, salt,
-                        calorie_goal, activity_level
+                        id, name, email, phone_number, avatar_data_url, password_hash, salt,
+                        password_scheme, calorie_goal, activity_level, role
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING *
                     """,
                     (
                         user_id,
                         payload.name,
                         payload.email,
+                        None,
+                        None,
                         password_hash,
                         salt,
+                        "bcrypt",
                         payload.calorie_goal,
                         payload.activity_level,
+                        role,
                     ),
                 )
                 return cur.fetchone()
@@ -874,6 +1083,73 @@ def get_user_by_id(user_id: str) -> dict[str, Any] | None:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM users WHERE id = %s", (user_id,))
             return cur.fetchone()
+
+
+def update_user_profile(user_id: str, payload: ProfileUpdateRequest) -> dict[str, Any]:
+    updates = payload.model_dump(exclude_unset=True)
+    if not updates:
+        user = get_user_by_id(user_id)
+        if user is None:
+            raise unauthorized()
+        return user
+
+    if USE_MEMORY_STORAGE:
+        user = MEMORY_USERS_BY_ID.get(user_id)
+        if user is None:
+            raise unauthorized()
+        user.update(updates)
+        MEMORY_USERS_BY_EMAIL[user["email"]] = user
+        return user
+
+    allowed = {
+        "name",
+        "phone_number",
+        "avatar_data_url",
+        "calorie_goal",
+        "activity_level",
+    }
+    assignments = [f"{key} = %s" for key in updates if key in allowed]
+    values = [updates[key] for key in updates if key in allowed]
+    values.append(user_id)
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE users
+                SET {", ".join(assignments)}
+                WHERE id = %s
+                RETURNING *
+                """,
+                values,
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise unauthorized()
+            return row
+
+
+def update_user_password_hash(user_id: str, password: str) -> None:
+    salt, password_hash = hash_password(password)
+
+    if USE_MEMORY_STORAGE:
+        user = MEMORY_USERS_BY_ID.get(user_id)
+        if user:
+            user["salt"] = salt
+            user["password_hash"] = password_hash
+            user["password_scheme"] = "bcrypt"
+        return
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET salt = %s, password_hash = %s, password_scheme = 'bcrypt'
+                WHERE id = %s
+                """,
+                (salt, password_hash, user_id),
+            )
 
 
 def issue_token(user: dict[str, Any]) -> str:
@@ -1270,6 +1546,378 @@ def delete_calendar_event_for_user(user_id: str, event_id: str) -> bool:
             return cur.rowcount > 0
 
 
+def request_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    if forwarded:
+        return forwarded[:80]
+    return (request.client.host if request.client else "unknown")[:80]
+
+
+def request_fingerprint(request: Request) -> str:
+    explicit = request.headers.get("x-trackfood-fingerprint") or request.headers.get("x-station-id")
+    if explicit:
+        return normalize_text(explicit)[:160]
+    user_agent = request.headers.get("user-agent", "unknown")
+    return hashlib.sha256(user_agent.encode("utf-8")).hexdigest()[:32]
+
+
+def event_response_from_row(row: dict[str, Any]) -> SecurityEventResponse:
+    return SecurityEventResponse(
+        id=str(row["id"]),
+        action=row["action"],
+        severity=row["severity"],
+        user_id=str(row["user_id"]) if row.get("user_id") else None,
+        ip=row["ip"],
+        path=row["path"],
+        user_agent=row["user_agent"],
+        fingerprint=row["fingerprint"],
+        details=row["details"],
+        created_at=isoformat(row["created_at"]),
+    )
+
+
+def intruder_response_from_row(row: dict[str, Any]) -> IntruderFlagResponse:
+    return IntruderFlagResponse(
+        id=str(row["id"]),
+        ip=row["ip"],
+        fingerprint=row["fingerprint"],
+        attempts=int(row["attempts"]),
+        is_blocked=bool(row["is_blocked"]),
+        last_seen_at=isoformat(row["last_seen_at"]),
+        blocked_at=isoformat(row["blocked_at"]) if row.get("blocked_at") else None,
+    )
+
+
+def log_security_event(
+    action: str,
+    severity: SecuritySeverity,
+    request: Request,
+    user_id: str | None = None,
+    details: str = "",
+) -> SecurityEventResponse:
+    event = {
+        "id": str(uuid4()),
+        "action": action,
+        "severity": severity,
+        "user_id": user_id,
+        "ip": request_ip(request),
+        "path": str(request.url.path)[:240],
+        "user_agent": request.headers.get("user-agent", "unknown")[:240],
+        "fingerprint": request_fingerprint(request),
+        "details": normalize_text(details)[:500],
+        "created_at": datetime.now(timezone.utc),
+    }
+
+    if USE_MEMORY_STORAGE:
+        MEMORY_SECURITY_EVENTS.append(event)
+        return event_response_from_row(event)
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO security_events (
+                    id, action, severity, user_id, ip, path,
+                    user_agent, fingerprint, details, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    event["id"],
+                    action,
+                    severity,
+                    user_id,
+                    event["ip"],
+                    event["path"],
+                    event["user_agent"],
+                    event["fingerprint"],
+                    event["details"],
+                    event["created_at"],
+                ),
+            )
+            return event_response_from_row(cur.fetchone())
+
+
+def flag_intruder(request: Request) -> IntruderFlagResponse:
+    ip = request_ip(request)
+    fingerprint = request_fingerprint(request)
+    now = datetime.now(timezone.utc)
+    key = f"{ip}:{fingerprint}"
+
+    if USE_MEMORY_STORAGE:
+        row = MEMORY_INTRUDERS.get(key)
+        if row:
+            row["attempts"] += 1
+            row["last_seen_at"] = now
+        else:
+            row = {
+                "id": str(uuid4()),
+                "ip": ip,
+                "fingerprint": fingerprint,
+                "attempts": 1,
+                "is_blocked": False,
+                "last_seen_at": now,
+                "blocked_at": None,
+            }
+            MEMORY_INTRUDERS[key] = row
+        if row["attempts"] >= INTRUDER_BLOCK_THRESHOLD:
+            row["is_blocked"] = True
+            row["blocked_at"] = row["blocked_at"] or now
+        return intruder_response_from_row(row)
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO intruder_flags (
+                    id, ip, fingerprint, attempts, is_blocked, last_seen_at, blocked_at
+                )
+                VALUES (%s, %s, %s, 1, FALSE, %s, NULL)
+                ON CONFLICT (ip, fingerprint) DO UPDATE SET
+                    attempts = intruder_flags.attempts + 1,
+                    last_seen_at = EXCLUDED.last_seen_at,
+                    is_blocked = (intruder_flags.attempts + 1) >= %s,
+                    blocked_at = CASE
+                        WHEN (intruder_flags.attempts + 1) >= %s
+                        THEN COALESCE(intruder_flags.blocked_at, EXCLUDED.last_seen_at)
+                        ELSE intruder_flags.blocked_at
+                    END
+                RETURNING *
+                """,
+                (str(uuid4()), ip, fingerprint, now, INTRUDER_BLOCK_THRESHOLD, INTRUDER_BLOCK_THRESHOLD),
+            )
+            return intruder_response_from_row(cur.fetchone())
+
+
+def get_intruder_for_request(request: Request) -> IntruderFlagResponse | None:
+    ip = request_ip(request)
+    fingerprint = request_fingerprint(request)
+
+    if USE_MEMORY_STORAGE:
+        row = MEMORY_INTRUDERS.get(f"{ip}:{fingerprint}")
+        return intruder_response_from_row(row) if row else None
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM intruder_flags WHERE ip = %s AND fingerprint = %s",
+                (ip, fingerprint),
+            )
+            row = cur.fetchone()
+            return intruder_response_from_row(row) if row else None
+
+
+def unblock_intruder(intruder_id: str) -> IntruderFlagResponse | None:
+    if USE_MEMORY_STORAGE:
+        for row in MEMORY_INTRUDERS.values():
+            if row["id"] == intruder_id:
+                row["is_blocked"] = False
+                row["attempts"] = 0
+                row["blocked_at"] = None
+                row["last_seen_at"] = datetime.now(timezone.utc)
+                return intruder_response_from_row(row)
+        return None
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE intruder_flags
+                SET is_blocked = FALSE, attempts = 0, blocked_at = NULL, last_seen_at = NOW()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (intruder_id,),
+            )
+            row = cur.fetchone()
+            return intruder_response_from_row(row) if row else None
+
+
+def list_security_events(limit: int = 40, offset: int = 0) -> list[SecurityEventResponse]:
+    limit = min(max(limit, 1), 100)
+    offset = max(offset, 0)
+    if USE_MEMORY_STORAGE:
+        rows = sorted(MEMORY_SECURITY_EVENTS, key=lambda item: item["created_at"], reverse=True)
+        return [event_response_from_row(row) for row in rows[offset : offset + limit]]
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM security_events
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                (limit, offset),
+            )
+            return [event_response_from_row(row) for row in cur.fetchall()]
+
+
+def list_intruders() -> list[IntruderFlagResponse]:
+    if USE_MEMORY_STORAGE:
+        rows = sorted(MEMORY_INTRUDERS.values(), key=lambda item: item["last_seen_at"], reverse=True)
+        return [intruder_response_from_row(row) for row in rows]
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM intruder_flags ORDER BY last_seen_at DESC")
+            return [intruder_response_from_row(row) for row in cur.fetchall()]
+
+
+def security_summary() -> SecuritySummaryResponse:
+    events = list_security_events(limit=500)
+    intruders = list_intruders()
+    return SecuritySummaryResponse(
+        events=len(events),
+        warnings=sum(1 for event in events if event.severity == "warning"),
+        critical=sum(1 for event in events if event.severity == "critical"),
+        blocked_intruders=sum(1 for intruder in intruders if intruder.is_blocked),
+        recent_events=events[:8],
+    )
+
+
+def require_admin(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    if user.get("role") == "admin" or role_for_email(user["email"]) == "admin":
+        return user
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+
+def assistant_message_response(row: dict[str, Any]) -> AssistantMessageResponse:
+    return AssistantMessageResponse(
+        id=str(row["id"]),
+        role=row["role"],
+        content=row["content"],
+        provider=row["provider"],
+        model=row["model"],
+        created_at=isoformat(row["created_at"]),
+    )
+
+
+def list_assistant_messages_for_user(user_id: str, limit: int = 80) -> list[AssistantMessageResponse]:
+    limit = min(max(limit, 1), 120)
+    if USE_MEMORY_STORAGE:
+        rows = MEMORY_AI_MESSAGES_BY_USER[user_id][-limit:]
+        return [assistant_message_response(row) for row in rows]
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM ai_messages
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (user_id, limit),
+            )
+            rows = list(reversed(cur.fetchall()))
+            return [assistant_message_response(row) for row in rows]
+
+
+def create_assistant_message_for_user(
+    user_id: str,
+    role: AssistantRole,
+    content: str,
+    provider: str = "gemini",
+    model: str = GEMINI_MODEL,
+) -> AssistantMessageResponse:
+    row = {
+        "id": str(uuid4()),
+        "user_id": user_id,
+        "role": role,
+        "content": content,
+        "provider": provider,
+        "model": model,
+        "created_at": datetime.now(timezone.utc),
+    }
+
+    if USE_MEMORY_STORAGE:
+        MEMORY_AI_MESSAGES_BY_USER[user_id].append(row)
+        return assistant_message_response(row)
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ai_messages (id, user_id, role, content, provider, model, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    row["id"],
+                    user_id,
+                    role,
+                    content,
+                    provider,
+                    model,
+                    row["created_at"],
+                ),
+            )
+            return assistant_message_response(cur.fetchone())
+
+
+ASSISTANT_SYSTEM_PROMPT = (
+    "You are TrackFood AI, a concise nutrition and planning assistant inside a food tracker. "
+    "Help with meal ideas, product choices, diary reflection, calendar planning, and habit building. "
+    "Do not diagnose, treat, or replace medical advice. Keep answers practical and safe."
+)
+
+
+def generate_assistant_reply(messages: list[AssistantMessageResponse]) -> str:
+    if not GEMINI_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI key is not configured",
+        )
+
+    contents = [
+        {
+            "role": "model" if message.role == "assistant" else "user",
+            "parts": [{"text": message.content}],
+        }
+        for message in messages[-12:]
+    ]
+    payload = {
+        "systemInstruction": {"parts": [{"text": ASSISTANT_SYSTEM_PROMPT}]},
+        "contents": contents,
+        "generationConfig": {
+            "temperature": 0.6,
+            "maxOutputTokens": 700,
+        },
+    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+
+    try:
+        with httpx.Client(timeout=22.0) as client:
+            response = client.post(
+                url,
+                headers={
+                    "x-goog-api-key": GEMINI_API_KEY,
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="AI provider request failed",
+        ) from exc
+
+    parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+    text = "\n".join(part.get("text", "") for part in parts).strip()
+    if not text:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="AI provider returned an empty reply",
+        )
+    return text
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_storage_with_retries()
@@ -1320,7 +1968,37 @@ app.add_middleware(
 
 @app.middleware("http")
 async def harden_requests(request: Request, call_next):
-    client = request.client.host if request.client else "unknown"
+    intruder = get_intruder_for_request(request)
+    if intruder and intruder.is_blocked:
+        log_security_event(
+            "blocked_request",
+            "critical",
+            request,
+            details="Blocked request from flagged fingerprint",
+        )
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"detail": "Request blocked"},
+        )
+
+    suspicious_surface = " ".join(
+        [
+            request.url.path,
+            request.url.query,
+            request.headers.get("user-agent", ""),
+            request.headers.get("referer", ""),
+        ]
+    )
+    if any(pattern.search(suspicious_surface) for pattern in DANGEROUS_PATTERNS):
+        flag_intruder(request)
+        log_security_event(
+            "suspicious_request",
+            "warning",
+            request,
+            details="Suspicious request signature detected",
+        )
+
+    client = request_ip(request)
     key = f"{client}:{request.url.path}"
     current_time = time.monotonic()
     bucket = RATE_BUCKETS[key]
@@ -1328,7 +2006,10 @@ async def harden_requests(request: Request, call_next):
     while bucket and current_time - bucket[0] > 60:
         bucket.popleft()
 
-    if len(bucket) >= MAX_REQUESTS_PER_MINUTE:
+    limit = AUTH_REQUESTS_PER_MINUTE if request.url.path.startswith("/api/v1/auth/") else MAX_REQUESTS_PER_MINUTE
+    if len(bucket) >= limit:
+        flag_intruder(request)
+        log_security_event("rate_limited", "warning", request, details=f"Limit {limit}/minute exceeded")
         return JSONResponse(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             content={"detail": "Too many requests"},
@@ -1348,16 +2029,29 @@ async def harden_requests(request: Request, call_next):
         )
 
     response = await call_next(request)
+    if response.status_code in {401, 403}:
+        flag_intruder(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(self), microphone=(), geolocation=()"
-    response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none'"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "img-src 'self' data: https://fastapi.tiangolo.com; "
+        "frame-ancestors 'none'"
+    )
     return response
 
 
-@app.get("/", tags=["Root"])
-def root() -> dict[str, str]:
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    return RedirectResponse(url="/docs", status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+
+@app.get("/api/v1/root", tags=["App"])
+def root_payload() -> dict[str, str]:
     return {
         "name": "TrackFood AI Backend",
         "docs": "/docs",
@@ -1391,10 +2085,13 @@ def app_status() -> AppStatusResponse:
             "strict CORS",
             "trusted hosts",
             "JWT auth",
+            "bcrypt password hashing",
             "rate limiting",
             "body size limit",
             "security headers",
             "input validation",
+            "intruder tracking",
+            "security audit logs",
         ],
     )
 
@@ -1457,20 +2154,44 @@ def register(payload: RegisterRequest) -> AuthResponse:
 
 
 @app.post("/api/v1/auth/login", response_model=AuthResponse, tags=["Auth"])
-def login(payload: LoginRequest) -> AuthResponse:
+def login(payload: LoginRequest, request: Request) -> AuthResponse:
     user = get_user_by_email(payload.email)
-    if user is None or not verify_password(payload.password, user["salt"], user["password_hash"]):
+    if user is None or not verify_password(
+        payload.password,
+        user["salt"],
+        user["password_hash"],
+        user.get("password_scheme"),
+    ):
+        log_security_event(
+            "auth_login_failed",
+            "warning",
+            request,
+            details=f"Failed login for {payload.email}",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         )
 
+    if user.get("password_scheme") != "bcrypt":
+        update_user_password_hash(str(user["id"]), payload.password)
+        user = get_user_by_email(payload.email) or user
+
+    log_security_event("auth_login_success", "info", request, str(user["id"]))
     return AuthResponse(token=issue_token(user), profile=to_public_profile(user))
 
 
 @app.get("/api/v1/profile", response_model=PublicProfile, tags=["Profile"])
 def get_profile(user: dict[str, Any] = Depends(get_current_user)) -> PublicProfile:
     return to_public_profile(user)
+
+
+@app.patch("/api/v1/profile", response_model=PublicProfile, tags=["Profile"])
+def update_profile(
+    payload: ProfileUpdateRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> PublicProfile:
+    return to_public_profile(update_user_profile(str(user["id"]), payload))
 
 
 @app.get("/api/v1/profile/stats", response_model=ProfileStatsResponse, tags=["Profile"])
@@ -1490,6 +2211,79 @@ def get_profile_stats(
         fiber_g=sum(meal.fiber_g for meal in meals),
         meals=meals,
     )
+
+
+@app.get(
+    "/api/v1/assistant/messages",
+    response_model=list[AssistantMessageResponse],
+    tags=["Assistant"],
+)
+def list_assistant_messages(
+    user: dict[str, Any] = Depends(get_current_user),
+) -> list[AssistantMessageResponse]:
+    return list_assistant_messages_for_user(str(user["id"]))
+
+
+@app.post(
+    "/api/v1/assistant/messages",
+    response_model=AssistantMessageResponse,
+    tags=["Assistant"],
+)
+def create_assistant_message(
+    payload: AssistantMessageCreateRequest,
+    request: Request,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> AssistantMessageResponse:
+    existing = list_assistant_messages_for_user(str(user["id"]))
+    user_message = create_assistant_message_for_user(str(user["id"]), "user", payload.message)
+    reply = generate_assistant_reply([*existing, user_message])
+    assistant_message = create_assistant_message_for_user(str(user["id"]), "assistant", reply)
+    log_security_event("assistant_message", "info", request, str(user["id"]), "Assistant reply generated")
+    return assistant_message
+
+
+@app.get("/api/v1/security/summary", response_model=SecuritySummaryResponse, tags=["Security"])
+def get_security_summary(_: dict[str, Any] = Depends(require_admin)) -> SecuritySummaryResponse:
+    return security_summary()
+
+
+@app.get(
+    "/api/v1/security/events",
+    response_model=list[SecurityEventResponse],
+    tags=["Security"],
+)
+def get_security_events(
+    limit: Annotated[int, Query(ge=1, le=100)] = 40,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    _: dict[str, Any] = Depends(require_admin),
+) -> list[SecurityEventResponse]:
+    return list_security_events(limit, offset)
+
+
+@app.get(
+    "/api/v1/security/intruders",
+    response_model=list[IntruderFlagResponse],
+    tags=["Security"],
+)
+def get_security_intruders(
+    _: dict[str, Any] = Depends(require_admin),
+) -> list[IntruderFlagResponse]:
+    return list_intruders()
+
+
+@app.post(
+    "/api/v1/security/intruders/{intruder_id}/unblock",
+    response_model=IntruderFlagResponse,
+    tags=["Security"],
+)
+def unblock_security_intruder(
+    intruder_id: str,
+    _: dict[str, Any] = Depends(require_admin),
+) -> IntruderFlagResponse:
+    intruder = unblock_intruder(intruder_id)
+    if intruder is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Intruder not found")
+    return intruder
 
 
 @app.get("/api/v1/meals", response_model=list[MealLogResponse], tags=["Meals"])

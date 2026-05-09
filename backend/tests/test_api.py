@@ -4,14 +4,26 @@ import os
 
 os.environ["DATABASE_URL"] = "memory://test"
 os.environ["SECRET_KEY"] = "trackfoodai-test-secret-with-enough-length"
+os.environ["TRACKFOODAI_ADMIN_EMAILS"] = "admin@example.com"
+os.environ["GEMINI_API_KEY"] = ""
 
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import (
+    MEMORY_USERS_BY_EMAIL,
+    MEMORY_USERS_BY_ID,
+    app,
+    hash_password_legacy,
+    now_iso,
+)
 
 
 def test_health_and_foods() -> None:
     with TestClient(app) as client:
+        root = client.get("/", follow_redirects=False)
+        assert root.status_code == 307
+        assert root.headers["location"] == "/docs"
+
         health = client.get("/health")
         assert health.status_code == 200
         assert health.json()["status"] == "ok"
@@ -43,6 +55,7 @@ def test_auth_meal_log_and_delete() -> None:
             },
         )
         assert register.status_code == 201
+        assert register.json()["profile"]["role"] == "user"
         token = register.json()["token"]
         headers = {"Authorization": f"Bearer {token}"}
 
@@ -63,9 +76,113 @@ def test_auth_meal_log_and_delete() -> None:
         assert meals.status_code == 200
         assert len(meals.json()) == 1
 
+        profile = client.patch(
+            "/api/v1/profile",
+            json={
+                "phone_number": "+34 600 100 200",
+                "avatar_data_url": "data:image/png;base64,abc123",
+                "calorie_goal": 2100,
+            },
+            headers=headers,
+        )
+        assert profile.status_code == 200
+        assert profile.json()["phone_number"] == "+34 600 100 200"
+        assert profile.json()["calorie_goal"] == 2100
+
         deleted = client.delete(f"/api/v1/meals/{meal_id}", headers=headers)
         assert deleted.status_code == 200
         assert deleted.json()["status"] == "deleted"
+
+
+def test_admin_security_and_legacy_password_migration() -> None:
+    with TestClient(app) as client:
+        admin = client.post(
+            "/api/v1/auth/register",
+            json={
+                "name": "Admin User",
+                "email": "admin@example.com",
+                "password": "LocalPass123",
+                "calorie_goal": 1900,
+                "activity_level": "balanced",
+            },
+        )
+        assert admin.status_code == 201
+        assert admin.json()["profile"]["role"] == "admin"
+        admin_headers = {"Authorization": f"Bearer {admin.json()['token']}"}
+
+        normal = client.post(
+            "/api/v1/auth/register",
+            json={
+                "name": "Regular User",
+                "email": "regular@example.com",
+                "password": "LocalPass123",
+                "calorie_goal": 1900,
+                "activity_level": "balanced",
+            },
+        )
+        normal_headers = {"Authorization": f"Bearer {normal.json()['token']}"}
+        forbidden = client.get("/api/v1/security/summary", headers=normal_headers)
+        assert forbidden.status_code == 403
+
+        failed = client.post(
+            "/api/v1/auth/login",
+            json={"email": "regular@example.com", "password": "WrongPass123"},
+        )
+        assert failed.status_code == 401
+
+        summary = client.get("/api/v1/security/summary", headers=admin_headers)
+        assert summary.status_code == 200
+        assert summary.json()["warnings"] >= 1
+
+        salt, legacy_hash = hash_password_legacy("LegacyPass123")
+        legacy_user = {
+            "id": "legacy-user-id",
+            "name": "Legacy User",
+            "email": "legacy@example.com",
+            "phone_number": None,
+            "avatar_data_url": None,
+            "password_hash": legacy_hash,
+            "salt": salt,
+            "password_scheme": "pbkdf2",
+            "calorie_goal": 1800,
+            "activity_level": "balanced",
+            "role": "user",
+            "created_at": now_iso(),
+        }
+        MEMORY_USERS_BY_EMAIL[legacy_user["email"]] = legacy_user
+        MEMORY_USERS_BY_ID[legacy_user["id"]] = legacy_user
+        migrated = client.post(
+            "/api/v1/auth/login",
+            json={"email": "legacy@example.com", "password": "LegacyPass123"},
+        )
+        assert migrated.status_code == 200
+        assert MEMORY_USERS_BY_ID["legacy-user-id"]["password_scheme"] == "bcrypt"
+
+
+def test_assistant_requires_configured_key() -> None:
+    with TestClient(app) as client:
+        register = client.post(
+            "/api/v1/auth/register",
+            json={
+                "name": "Assistant User",
+                "email": "assistant@example.com",
+                "password": "LocalPass123",
+                "calorie_goal": 1900,
+                "activity_level": "balanced",
+            },
+        )
+        headers = {"Authorization": f"Bearer {register.json()['token']}"}
+        empty = client.get("/api/v1/assistant/messages", headers=headers)
+        assert empty.status_code == 200
+        assert empty.json() == []
+
+        chat = client.post(
+            "/api/v1/assistant/messages",
+            json={"message": "What should I eat after training?"},
+            headers=headers,
+        )
+        assert chat.status_code == 503
+        assert chat.json()["detail"] == "AI key is not configured"
 
 
 def test_nutrition_estimate() -> None:

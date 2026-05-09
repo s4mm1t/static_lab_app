@@ -45,6 +45,9 @@ services:
       PLANNER_DATABASE_URL: postgresql://trackfoodai:trackfoodai@planner_db:5432/trackfoodai_planner
       EXTERNAL_PRODUCTS_SQLITE: /external-db/Combined.sqlite
       SECRET_KEY: trackfoodai-local-docker-secret-change-me
+      TRACKFOODAI_ADMIN_EMAILS: "${TRACKFOODAI_ADMIN_EMAILS:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      GEMINI_MODEL: "${GEMINI_MODEL:-gemini-2.5-flash-lite}"
       ALLOWED_HOSTS: "localhost,127.0.0.1,testserver,backend,frontend,*.orb.local,192.168.18.40,192.168.18.87"
       CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000,http://192.168.18.40:3000,http://192.168.18.87:3000"
     volumes:
