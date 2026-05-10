@@ -25,6 +25,7 @@ backend/**/*.pyc
 /build
 
 # misc
+/backups/
 .DS_Store
 ._*
 *.pem

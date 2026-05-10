@@ -35,6 +35,24 @@ services:
       retries: 8
     restart: unless-stopped
 
+  assistant_db:
+    image: postgres:16-alpine
+    container_name: trackfoodai-assistant-db
+    environment:
+      POSTGRES_DB: trackfoodai_assistant
+      POSTGRES_USER: trackfoodai
+      POSTGRES_PASSWORD: trackfoodai
+    ports:
+      - "5434:5432"
+    volumes:
+      - trackfoodai-assistant-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trackfoodai -d trackfoodai_assistant"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
@@ -43,6 +61,7 @@ services:
       APP_ENV: local
       DATABASE_URL: postgresql://trackfoodai:trackfoodai@db:5432/trackfoodai
       PLANNER_DATABASE_URL: postgresql://trackfoodai:trackfoodai@planner_db:5432/trackfoodai_planner
+      ASSISTANT_DATABASE_URL: postgresql://trackfoodai:trackfoodai@assistant_db:5432/trackfoodai_assistant
       EXTERNAL_PRODUCTS_SQLITE: /external-db/Combined.sqlite
       SECRET_KEY: trackfoodai-local-docker-secret-change-me
       TRACKFOODAI_ADMIN_EMAILS: "${TRACKFOODAI_ADMIN_EMAILS:-}"
@@ -58,6 +77,8 @@ services:
       db:
         condition: service_healthy
       planner_db:
+        condition: service_healthy
+      assistant_db:
         condition: service_healthy
     healthcheck:
       test:
@@ -92,3 +113,4 @@ services:
 volumes:
   trackfoodai-postgres:
   trackfoodai-planner-postgres:
+  trackfoodai-assistant-postgres:

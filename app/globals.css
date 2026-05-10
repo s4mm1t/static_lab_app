@@ -1670,6 +1670,102 @@ p {
   resize: vertical;
 }
 
+
+.context-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.context-list button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--page-alt);
+  color: var(--text);
+  padding: 12px 14px;
+  text-align: left;
+}
+
+.context-list button.active {
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--line));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+
+.context-list strong,
+.context-list span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-list span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.context-editor {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.context-editor span {
+  color: var(--quiet);
+  font-size: 0.78rem;
+  font-weight: 860;
+  text-transform: uppercase;
+}
+
+.context-editor input {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  outline: none;
+  background: var(--page-alt);
+  color: var(--text);
+  padding: 12px 14px;
+  font: inherit;
+  font-weight: 760;
+}
+
+.context-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.danger-soft {
+  color: #ff8b7f;
+}
+
+.assistant-memory-card {
+  display: grid;
+  gap: 4px;
+  margin-top: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 20% 0%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 42%),
+    var(--page-alt);
+  padding: 16px;
+}
+
+.assistant-memory-card span,
+.assistant-memory-card small {
+  color: var(--muted);
+}
+
+.assistant-memory-card strong {
+  color: var(--text);
+  font-size: 1.7rem;
+}
+
 .assistant-side p,
 .scanner-summary p {
   margin: 16px 0 0;

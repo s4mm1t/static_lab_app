@@ -91,8 +91,17 @@ type AuthResponse = {
   profile: PublicProfile;
 };
 
+type AssistantContext = {
+  id: string;
+  title: string;
+  summary: string;
+  created_at: string;
+  updated_at: string;
+};
+
 type AssistantMessage = {
   id: string;
+  context_id: string;
   role: "user" | "assistant";
   content: string;
   provider: string;
@@ -355,6 +364,10 @@ async function apiRequest<T>(
       // Keep status message.
     }
     throw new Error(detail);
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
   }
 
   return (await response.json()) as T;
@@ -1001,6 +1014,9 @@ export default function TrackFoodApp() {
   });
   const [barcodeText, setBarcodeText] = useState("");
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [assistantContexts, setAssistantContexts] = useState<AssistantContext[]>([]);
+  const [activeAssistantContextId, setActiveAssistantContextId] = useState<string | null>(null);
+  const [contextTitle, setContextTitle] = useState("New context");
   const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([]);
   const [assistantText, setAssistantText] = useState("");
   const [isAssistantLoading, setIsAssistantLoading] = useState(false);
@@ -1245,18 +1261,40 @@ export default function TrackFoodApp() {
     }
   }
 
-  async function refreshAssistant(nextToken = token) {
+  async function refreshAssistantContexts(nextToken = token, preferredContextId = activeAssistantContextId) {
+    if (!nextToken) {
+      setAssistantContexts([]);
+      setActiveAssistantContextId(null);
+      return null;
+    }
+
+    const contexts = await apiRequest<AssistantContext[]>(
+      "/api/v1/assistant/contexts",
+      {},
+      nextToken,
+    );
+    setAssistantContexts(contexts);
+    const selected = contexts.find((context) => context.id === preferredContextId) ?? contexts[0] ?? null;
+    setActiveAssistantContextId(selected?.id ?? null);
+    setContextTitle(selected?.title ?? "New context");
+    return selected?.id ?? null;
+  }
+
+  async function refreshAssistant(nextToken = token, nextContextId = activeAssistantContextId) {
     if (!nextToken) {
       setAssistantMessages([]);
       return;
     }
     try {
+      const contextId = nextContextId ?? (await refreshAssistantContexts(nextToken, nextContextId));
+      const suffix = contextId ? `?context_id=${encodeURIComponent(contextId)}` : "";
       const messages = await apiRequest<AssistantMessage[]>(
-        "/api/v1/assistant/messages",
+        `/api/v1/assistant/messages${suffix}`,
         {},
         nextToken,
       );
       setAssistantMessages(messages);
+      setAssistantError("");
     } catch (error) {
       setAssistantError(getErrorMessage(error));
     }
@@ -1400,6 +1438,9 @@ export default function TrackFoodApp() {
     setProfile(null);
     setMeals([]);
     setCalendarEvents([]);
+    setAssistantContexts([]);
+    setActiveAssistantContextId(null);
+    setContextTitle("New context");
     setAssistantMessages([]);
     setSecuritySummary(null);
     setIntruders([]);
@@ -1604,6 +1645,7 @@ export default function TrackFoodApp() {
 
     const localUserMessage: AssistantMessage = {
       id: `local-${Date.now()}`,
+      context_id: activeAssistantContextId ?? "local",
       role: "user",
       content: message,
       provider: "local",
@@ -1620,11 +1662,13 @@ export default function TrackFoodApp() {
         "/api/v1/assistant/messages",
         {
           method: "POST",
-          body: JSON.stringify({ message }),
+          body: JSON.stringify({ message, context_id: activeAssistantContextId }),
         },
         token,
       );
       setAssistantMessages((current) => [...current, reply]);
+      setActiveAssistantContextId(reply.context_id);
+      await refreshAssistantContexts(token, reply.context_id);
       setStatus("Assistant replied");
     } catch (error) {
       setAssistantError(getErrorMessage(error));
@@ -1633,6 +1677,79 @@ export default function TrackFoodApp() {
       );
     } finally {
       setIsAssistantLoading(false);
+    }
+  }
+
+  async function createAssistantContext() {
+    if (!token) {
+      return;
+    }
+    try {
+      const context = await apiRequest<AssistantContext>(
+        "/api/v1/assistant/contexts",
+        {
+          method: "POST",
+          body: JSON.stringify({ title: "New context" }),
+        },
+        token,
+      );
+      setAssistantContexts((current) => [context, ...current]);
+      setActiveAssistantContextId(context.id);
+      setContextTitle(context.title);
+      setAssistantMessages([]);
+      setAssistantError("");
+    } catch (error) {
+      setAssistantError(getErrorMessage(error));
+    }
+  }
+
+  async function selectAssistantContext(contextId: string) {
+    setActiveAssistantContextId(contextId);
+    const context = assistantContexts.find((item) => item.id === contextId);
+    setContextTitle(context?.title ?? "New context");
+    await refreshAssistant(token, contextId);
+  }
+
+  async function saveAssistantContextTitle() {
+    if (!token || !activeAssistantContextId) {
+      return;
+    }
+    try {
+      const context = await apiRequest<AssistantContext>(
+        `/api/v1/assistant/contexts/${activeAssistantContextId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ title: contextTitle.trim() || "New context" }),
+        },
+        token,
+      );
+      setAssistantContexts((current) =>
+        current.map((item) => (item.id === context.id ? context : item)),
+      );
+      setContextTitle(context.title);
+    } catch (error) {
+      setAssistantError(getErrorMessage(error));
+    }
+  }
+
+  async function deleteAssistantContext() {
+    if (!token || !activeAssistantContextId || assistantContexts.length <= 1) {
+      return;
+    }
+    try {
+      await apiRequest(
+        `/api/v1/assistant/contexts/${activeAssistantContextId}`,
+        { method: "DELETE" },
+        token,
+      );
+      const nextContexts = assistantContexts.filter((context) => context.id !== activeAssistantContextId);
+      const nextContext = nextContexts[0] ?? null;
+      setAssistantContexts(nextContexts);
+      setActiveAssistantContextId(nextContext?.id ?? null);
+      setContextTitle(nextContext?.title ?? "New context");
+      await refreshAssistant(token, nextContext?.id ?? null);
+    } catch (error) {
+      setAssistantError(getErrorMessage(error));
     }
   }
 
@@ -2240,16 +2357,59 @@ export default function TrackFoodApp() {
           </section>
 
           <aside className="panel assistant-side">
-            <span className="eyebrow">Context</span>
-            <h2>{formatKcal(totals.calories)}</h2>
-            <div className="stats-grid">
-              <StatTile label="Left" value={formatKcal(remaining)} detail="today" />
-              <StatTile label="Meals" value={String(meals.length)} detail="logged" />
-              <StatTile label="Plans" value={String(selectedDayEvents.length)} detail={selectedDate} />
+            <div className="panel-heading compact-heading">
+              <div>
+                <span className="eyebrow">Contexts</span>
+                <h2>Memory</h2>
+              </div>
+              <button type="button" className="secondary-button" onClick={() => void createAssistantContext()}>
+                New
+              </button>
+            </div>
+
+            <div className="context-list">
+              {assistantContexts.map((context) => (
+                <button
+                  key={context.id}
+                  type="button"
+                  className={context.id === activeAssistantContextId ? "active" : ""}
+                  onClick={() => void selectAssistantContext(context.id)}
+                >
+                  <strong>{context.title}</strong>
+                  <span>{new Date(context.updated_at).toLocaleDateString()}</span>
+                </button>
+              ))}
+            </div>
+
+            <label className="context-editor">
+              <span>Context name</span>
+              <input
+                value={contextTitle}
+                onChange={(event) => setContextTitle(event.target.value)}
+                maxLength={80}
+              />
+            </label>
+            <div className="context-actions">
+              <button type="button" className="secondary-button" onClick={() => void saveAssistantContextTitle()}>
+                Save
+              </button>
+              <button
+                type="button"
+                className="secondary-button danger-soft"
+                onClick={() => void deleteAssistantContext()}
+                disabled={assistantContexts.length <= 1}
+              >
+                Delete
+              </button>
+            </div>
+
+            <div className="assistant-memory-card">
+              <span>Today</span>
+              <strong>{formatKcal(totals.calories)}</strong>
+              <small>{meals.length} meals, {selectedDayEvents.length} plans</small>
             </div>
             <p>
-              The assistant can help with food choices and planning, but medical decisions
-              still belong with professionals.
+              Contexts are saved to your account, so each chat can keep its own memory for meal planning, grocery choices, or training days.
             </p>
           </aside>
         </section>

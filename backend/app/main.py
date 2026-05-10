@@ -41,11 +41,13 @@ DATABASE_URL = os.getenv(
     "postgresql://trackfoodai:trackfoodai@localhost:5432/trackfoodai",
 )
 PLANNER_DATABASE_URL = os.getenv("PLANNER_DATABASE_URL", DATABASE_URL)
+ASSISTANT_DATABASE_URL = os.getenv("ASSISTANT_DATABASE_URL", DATABASE_URL)
 EXTERNAL_PRODUCTS_SQLITE = os.getenv("EXTERNAL_PRODUCTS_SQLITE", "")
 EXTERNAL_PRODUCTS_LIMIT = int(os.getenv("EXTERNAL_PRODUCTS_LIMIT", "30000"))
 EXTERNAL_PRODUCTS_REFRESH = os.getenv("EXTERNAL_PRODUCTS_REFRESH", "false").lower() == "true"
 USE_MEMORY_STORAGE = DATABASE_URL.startswith("memory://")
 USE_MEMORY_PLANNER = USE_MEMORY_STORAGE or PLANNER_DATABASE_URL.startswith("memory://")
+USE_MEMORY_ASSISTANT = USE_MEMORY_STORAGE or ASSISTANT_DATABASE_URL.startswith("memory://")
 SECRET_KEY = os.getenv("SECRET_KEY", "trackfoodai-local-dev-secret-change-me")
 JWT_ALGORITHM = "HS256"
 TOKEN_TTL_HOURS = 24 * 14
@@ -435,8 +437,35 @@ class SecuritySummaryResponse(BaseModel):
     recent_events: list[SecurityEventResponse]
 
 
+class AssistantContextCreateRequest(BaseModel):
+    title: str = Field("New context", min_length=1, max_length=80)
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, value: str) -> str:
+        return assert_clean(value)
+
+
+class AssistantContextUpdateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=80)
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, value: str) -> str:
+        return assert_clean(value)
+
+
+class AssistantContextResponse(BaseModel):
+    id: str
+    title: str
+    summary: str
+    created_at: str
+    updated_at: str
+
+
 class AssistantMessageCreateRequest(BaseModel):
     message: str = Field(..., min_length=2, max_length=1200)
+    context_id: str | None = None
 
     @field_validator("message")
     @classmethod
@@ -446,6 +475,7 @@ class AssistantMessageCreateRequest(BaseModel):
 
 class AssistantMessageResponse(BaseModel):
     id: str
+    context_id: str
     role: AssistantRole
     content: str
     provider: str
@@ -533,7 +563,9 @@ MEMORY_MEALS_BY_USER: dict[str, list[dict[str, Any]]] = defaultdict(list)
 MEMORY_CALENDAR_BY_USER: dict[str, list[dict[str, Any]]] = defaultdict(list)
 MEMORY_SECURITY_EVENTS: list[dict[str, Any]] = []
 MEMORY_INTRUDERS: dict[str, dict[str, Any]] = {}
-MEMORY_AI_MESSAGES_BY_USER: dict[str, list[dict[str, Any]]] = defaultdict(list)
+MEMORY_AI_CONTEXTS_BY_USER: dict[str, list[dict[str, Any]]] = defaultdict(list)
+MEMORY_AI_CONTEXTS_BY_ID: dict[str, dict[str, Any]] = {}
+MEMORY_AI_MESSAGES_BY_CONTEXT: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
 
 def connect() -> psycopg.Connection[Any]:
@@ -542,6 +574,10 @@ def connect() -> psycopg.Connection[Any]:
 
 def connect_planner() -> psycopg.Connection[Any]:
     return psycopg.connect(PLANNER_DATABASE_URL, row_factory=dict_row)
+
+
+def connect_assistant() -> psycopg.Connection[Any]:
+    return psycopg.connect(ASSISTANT_DATABASE_URL, row_factory=dict_row)
 
 
 def food_columns_sql() -> str:
@@ -580,7 +616,9 @@ def init_storage() -> None:
         MEMORY_CALENDAR_BY_USER.clear()
         MEMORY_SECURITY_EVENTS.clear()
         MEMORY_INTRUDERS.clear()
-        MEMORY_AI_MESSAGES_BY_USER.clear()
+        MEMORY_AI_CONTEXTS_BY_USER.clear()
+        MEMORY_AI_CONTEXTS_BY_ID.clear()
+        MEMORY_AI_MESSAGES_BY_CONTEXT.clear()
         return
 
     with connect() as conn:
@@ -690,26 +728,6 @@ def init_storage() -> None:
                 )
                 """
             )
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS ai_messages (
-                    id UUID PRIMARY KEY,
-                    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-                    content TEXT NOT NULL,
-                    provider TEXT NOT NULL DEFAULT 'gemini',
-                    model TEXT NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-                """
-            )
-            cur.execute(
-                """
-                CREATE INDEX IF NOT EXISTS ai_messages_user_created_idx
-                ON ai_messages (user_id, created_at)
-                """
-            )
-
             for food in SEED_FOODS:
                 upsert_food(cur, food.model_dump() | {"external_id": food.id})
 
@@ -750,16 +768,67 @@ def init_planner_storage() -> None:
             )
 
 
+def init_assistant_storage() -> None:
+    if USE_MEMORY_ASSISTANT:
+        MEMORY_AI_CONTEXTS_BY_USER.clear()
+        MEMORY_AI_CONTEXTS_BY_ID.clear()
+        MEMORY_AI_MESSAGES_BY_CONTEXT.clear()
+        return
+
+    with connect_assistant() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_contexts (
+                    id UUID PRIMARY KEY,
+                    user_id UUID NOT NULL,
+                    title TEXT NOT NULL,
+                    summary TEXT NOT NULL DEFAULT '',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS ai_contexts_user_updated_idx
+                ON ai_contexts (user_id, updated_at DESC)
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_messages (
+                    id UUID PRIMARY KEY,
+                    context_id UUID NOT NULL REFERENCES ai_contexts(id) ON DELETE CASCADE,
+                    user_id UUID NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+                    content TEXT NOT NULL,
+                    provider TEXT NOT NULL DEFAULT 'gemini',
+                    model TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS ai_messages_context_created_idx
+                ON ai_messages (context_id, created_at)
+                """
+            )
+
+
 def init_storage_with_retries() -> None:
     if USE_MEMORY_STORAGE:
         init_storage()
         init_planner_storage()
+        init_assistant_storage()
         return
 
     for attempt in range(1, 31):
         try:
             init_storage()
             init_planner_storage()
+            init_assistant_storage()
             return
         except psycopg.OperationalError:
             if attempt == 30:
@@ -1784,34 +1853,209 @@ def require_admin(user: dict[str, Any] = Depends(get_current_user)) -> dict[str,
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
 
 
+def assistant_context_response(row: dict[str, Any]) -> AssistantContextResponse:
+    return AssistantContextResponse(
+        id=str(row["id"]),
+        title=row["title"],
+        summary=row.get("summary") or "",
+        created_at=isoformat(row["created_at"]),
+        updated_at=isoformat(row["updated_at"]),
+    )
+
+
 def assistant_message_response(row: dict[str, Any]) -> AssistantMessageResponse:
     return AssistantMessageResponse(
         id=str(row["id"]),
+        context_id=str(row["context_id"]),
         role=row["role"],
-        content=row["content"],
+        content=sanitize_assistant_reply(row["content"]),
         provider=row["provider"],
         model=row["model"],
         created_at=isoformat(row["created_at"]),
     )
 
 
-def list_assistant_messages_for_user(user_id: str, limit: int = 80) -> list[AssistantMessageResponse]:
+def auto_context_title(message: str) -> str:
+    cleaned = normalize_text(message)
+    if len(cleaned) <= 46:
+        return cleaned or "New context"
+    return cleaned[:43].rstrip() + "..."
+
+
+def list_assistant_contexts_for_user(user_id: str) -> list[AssistantContextResponse]:
+    if USE_MEMORY_ASSISTANT:
+        rows = sorted(
+            MEMORY_AI_CONTEXTS_BY_USER[user_id],
+            key=lambda item: item["updated_at"],
+            reverse=True,
+        )
+        return [assistant_context_response(row) for row in rows]
+
+    with connect_assistant() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM ai_contexts
+                WHERE user_id = %s
+                ORDER BY updated_at DESC
+                """,
+                (user_id,),
+            )
+            return [assistant_context_response(row) for row in cur.fetchall()]
+
+
+def create_assistant_context_for_user(user_id: str, title: str = "New context") -> AssistantContextResponse:
+    now = datetime.now(timezone.utc)
+    row = {
+        "id": str(uuid4()),
+        "user_id": user_id,
+        "title": title,
+        "summary": "",
+        "created_at": now,
+        "updated_at": now,
+    }
+    if USE_MEMORY_ASSISTANT:
+        MEMORY_AI_CONTEXTS_BY_USER[user_id].append(row)
+        MEMORY_AI_CONTEXTS_BY_ID[row["id"]] = row
+        return assistant_context_response(row)
+
+    with connect_assistant() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ai_contexts (id, user_id, title, summary, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (row["id"], user_id, title, "", now, now),
+            )
+            return assistant_context_response(cur.fetchone())
+
+
+def get_assistant_context_for_user(user_id: str, context_id: str | None) -> AssistantContextResponse:
+    contexts = list_assistant_contexts_for_user(user_id)
+    if context_id is None:
+        if contexts:
+            return contexts[0]
+        return create_assistant_context_for_user(user_id, "Main context")
+
+    if USE_MEMORY_ASSISTANT:
+        row = MEMORY_AI_CONTEXTS_BY_ID.get(context_id)
+        if row and row["user_id"] == user_id:
+            return assistant_context_response(row)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assistant context not found")
+
+    with connect_assistant() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM ai_contexts WHERE id = %s AND user_id = %s",
+                (context_id, user_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assistant context not found")
+            return assistant_context_response(row)
+
+
+def update_assistant_context_for_user(user_id: str, context_id: str, title: str) -> AssistantContextResponse:
+    now = datetime.now(timezone.utc)
+    if USE_MEMORY_ASSISTANT:
+        row = MEMORY_AI_CONTEXTS_BY_ID.get(context_id)
+        if not row or row["user_id"] != user_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assistant context not found")
+        row["title"] = title
+        row["updated_at"] = now
+        return assistant_context_response(row)
+
+    with connect_assistant() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE ai_contexts
+                SET title = %s, updated_at = %s
+                WHERE id = %s AND user_id = %s
+                RETURNING *
+                """,
+                (title, now, context_id, user_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assistant context not found")
+            return assistant_context_response(row)
+
+
+def delete_assistant_context_for_user(user_id: str, context_id: str) -> None:
+    if USE_MEMORY_ASSISTANT:
+        row = MEMORY_AI_CONTEXTS_BY_ID.get(context_id)
+        if not row or row["user_id"] != user_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assistant context not found")
+        MEMORY_AI_CONTEXTS_BY_USER[user_id] = [item for item in MEMORY_AI_CONTEXTS_BY_USER[user_id] if item["id"] != context_id]
+        MEMORY_AI_CONTEXTS_BY_ID.pop(context_id, None)
+        MEMORY_AI_MESSAGES_BY_CONTEXT.pop(context_id, None)
+        return
+
+    with connect_assistant() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM ai_contexts WHERE id = %s AND user_id = %s RETURNING id",
+                (context_id, user_id),
+            )
+            if cur.fetchone() is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assistant context not found")
+
+
+def touch_assistant_context(user_id: str, context_id: str, title_from_message: str | None = None) -> None:
+    now = datetime.now(timezone.utc)
+    if USE_MEMORY_ASSISTANT:
+        row = MEMORY_AI_CONTEXTS_BY_ID.get(context_id)
+        if row and row["user_id"] == user_id:
+            if title_from_message and row["title"] in {"Main context", "New context"}:
+                row["title"] = auto_context_title(title_from_message)
+            row["updated_at"] = now
+        return
+
+    with connect_assistant() as conn:
+        with conn.cursor() as cur:
+            if title_from_message:
+                cur.execute(
+                    """
+                    UPDATE ai_contexts
+                    SET title = CASE WHEN title IN ('Main context', 'New context') THEN %s ELSE title END,
+                        updated_at = %s
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (auto_context_title(title_from_message), now, context_id, user_id),
+                )
+            else:
+                cur.execute(
+                    "UPDATE ai_contexts SET updated_at = %s WHERE id = %s AND user_id = %s",
+                    (now, context_id, user_id),
+                )
+
+
+def list_assistant_messages_for_user(
+    user_id: str,
+    context_id: str | None = None,
+    limit: int = 80,
+) -> list[AssistantMessageResponse]:
     limit = min(max(limit, 1), 120)
-    if USE_MEMORY_STORAGE:
-        rows = MEMORY_AI_MESSAGES_BY_USER[user_id][-limit:]
+    context = get_assistant_context_for_user(user_id, context_id)
+    if USE_MEMORY_ASSISTANT:
+        rows = MEMORY_AI_MESSAGES_BY_CONTEXT[context.id][-limit:]
         return [assistant_message_response(row) for row in rows]
 
-    with connect() as conn:
+    with connect_assistant() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT *
                 FROM ai_messages
-                WHERE user_id = %s
+                WHERE user_id = %s AND context_id = %s
                 ORDER BY created_at DESC
                 LIMIT %s
                 """,
-                (user_id, limit),
+                (user_id, context.id, limit),
             )
             rows = list(reversed(cur.fetchall()))
             return [assistant_message_response(row) for row in rows]
@@ -1819,6 +2063,7 @@ def list_assistant_messages_for_user(user_id: str, limit: int = 80) -> list[Assi
 
 def create_assistant_message_for_user(
     user_id: str,
+    context_id: str,
     role: AssistantRole,
     content: str,
     provider: str = "gemini",
@@ -1826,43 +2071,63 @@ def create_assistant_message_for_user(
 ) -> AssistantMessageResponse:
     row = {
         "id": str(uuid4()),
+        "context_id": context_id,
         "user_id": user_id,
         "role": role,
-        "content": content,
+        "content": sanitize_assistant_reply(content) if role == "assistant" else content,
         "provider": provider,
         "model": model,
         "created_at": datetime.now(timezone.utc),
     }
 
-    if USE_MEMORY_STORAGE:
-        MEMORY_AI_MESSAGES_BY_USER[user_id].append(row)
+    if USE_MEMORY_ASSISTANT:
+        MEMORY_AI_MESSAGES_BY_CONTEXT[context_id].append(row)
+        touch_assistant_context(user_id, context_id, content if role == "user" else None)
         return assistant_message_response(row)
 
-    with connect() as conn:
+    with connect_assistant() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO ai_messages (id, user_id, role, content, provider, model, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO ai_messages (id, context_id, user_id, role, content, provider, model, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
                     row["id"],
+                    context_id,
                     user_id,
                     role,
-                    content,
+                    row["content"],
                     provider,
                     model,
                     row["created_at"],
                 ),
             )
-            return assistant_message_response(cur.fetchone())
+            saved = assistant_message_response(cur.fetchone())
+    touch_assistant_context(user_id, context_id, content if role == "user" else None)
+    return saved
+
+
+def sanitize_assistant_reply(text: str) -> str:
+    cleaned = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"__(.*?)__", r"\1", cleaned)
+    cleaned = re.sub(r"^\s*[-*•]\s+", "", cleaned, flags=re.M)
+    cleaned = re.sub(r"`{1,3}([^`]+)`{1,3}", r"\1", cleaned)
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
 
 
 ASSISTANT_SYSTEM_PROMPT = (
     "You are TrackFood AI, a concise nutrition and planning assistant inside a food tracker. "
+    "You are multilingual: answer in the same language the user uses, especially English, Russian, or Spanish. "
+    "If the user mixes languages, follow the dominant language or the language they explicitly request. "
     "Help with meal ideas, product choices, diary reflection, calendar planning, and habit building. "
-    "Do not diagnose, treat, or replace medical advice. Keep answers practical and safe."
+    "Do not diagnose, treat, or replace medical advice. Keep answers practical and safe. "
+    "Write clean plain text only: no Markdown, no asterisks, no bold markers, no bullet glyphs. "
+    "Use short paragraphs, clear labels, and numbered steps only when they make the answer easier to scan."
 )
 
 
@@ -1915,7 +2180,7 @@ def generate_assistant_reply(messages: list[AssistantMessageResponse]) -> str:
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="AI provider returned an empty reply",
         )
-    return text
+    return sanitize_assistant_reply(text)
 
 
 @asynccontextmanager
@@ -2214,14 +2479,67 @@ def get_profile_stats(
 
 
 @app.get(
+    "/api/v1/assistant/contexts",
+    response_model=list[AssistantContextResponse],
+    tags=["Assistant"],
+)
+def list_assistant_contexts(
+    user: dict[str, Any] = Depends(get_current_user),
+) -> list[AssistantContextResponse]:
+    contexts = list_assistant_contexts_for_user(str(user["id"]))
+    if not contexts:
+        return [create_assistant_context_for_user(str(user["id"]), "Main context")]
+    return contexts
+
+
+@app.post(
+    "/api/v1/assistant/contexts",
+    response_model=AssistantContextResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Assistant"],
+)
+def create_assistant_context(
+    payload: AssistantContextCreateRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> AssistantContextResponse:
+    return create_assistant_context_for_user(str(user["id"]), payload.title)
+
+
+@app.patch(
+    "/api/v1/assistant/contexts/{context_id}",
+    response_model=AssistantContextResponse,
+    tags=["Assistant"],
+)
+def update_assistant_context(
+    context_id: str,
+    payload: AssistantContextUpdateRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> AssistantContextResponse:
+    return update_assistant_context_for_user(str(user["id"]), context_id, payload.title)
+
+
+@app.delete(
+    "/api/v1/assistant/contexts/{context_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["Assistant"],
+)
+def delete_assistant_context(
+    context_id: str,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> None:
+    delete_assistant_context_for_user(str(user["id"]), context_id)
+
+
+@app.get(
     "/api/v1/assistant/messages",
     response_model=list[AssistantMessageResponse],
     tags=["Assistant"],
 )
 def list_assistant_messages(
+    context_id: str | None = None,
     user: dict[str, Any] = Depends(get_current_user),
 ) -> list[AssistantMessageResponse]:
-    return list_assistant_messages_for_user(str(user["id"]))
+    return list_assistant_messages_for_user(str(user["id"]), context_id=context_id)
 
 
 @app.post(
@@ -2234,11 +2552,13 @@ def create_assistant_message(
     request: Request,
     user: dict[str, Any] = Depends(get_current_user),
 ) -> AssistantMessageResponse:
-    existing = list_assistant_messages_for_user(str(user["id"]))
-    user_message = create_assistant_message_for_user(str(user["id"]), "user", payload.message)
+    user_id = str(user["id"])
+    context = get_assistant_context_for_user(user_id, payload.context_id)
+    existing = list_assistant_messages_for_user(user_id, context_id=context.id)
+    user_message = create_assistant_message_for_user(user_id, context.id, "user", payload.message)
     reply = generate_assistant_reply([*existing, user_message])
-    assistant_message = create_assistant_message_for_user(str(user["id"]), "assistant", reply)
-    log_security_event("assistant_message", "info", request, str(user["id"]), "Assistant reply generated")
+    assistant_message = create_assistant_message_for_user(user_id, context.id, "assistant", reply)
+    log_security_event("assistant_message", "info", request, user_id, "Assistant reply generated")
     return assistant_message
 
 
