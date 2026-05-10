@@ -2238,18 +2238,139 @@ def sanitize_assistant_reply(text: str) -> str:
     return cleaned.strip()
 
 
+def local_day_key(value: str) -> str:
+    return value[:10]
+
+
+def build_assistant_app_context(user: dict[str, Any]) -> str:
+    user_id = str(user["id"])
+    today = datetime.now(timezone.utc).date()
+    tomorrow = today + timedelta(days=1)
+    meals = list_meals_for_user(user_id)
+    today_meals = [meal for meal in meals if local_day_key(meal.logged_at) == today.isoformat()]
+    upcoming_events = list_calendar_events_for_user(user_id, today, today + timedelta(days=14))
+
+    calories_logged = sum(meal.calories for meal in today_meals)
+    lines = [
+        "Private app context for this account. Use it to answer personally. Do not claim you cannot see the diary/profile/calendar when the data is listed here.",
+        f"Today date: {today.isoformat()}",
+        f"Tomorrow date: {tomorrow.isoformat()}",
+        f"User: {user['name']}",
+        f"Email: {user['email']}",
+        f"Daily calorie goal: {user['calorie_goal']} kcal",
+        f"Activity level: {user['activity_level']}",
+        f"Today calories logged: {calories_logged} kcal",
+        f"Today remaining calories: {max(int(user['calorie_goal']) - calories_logged, 0)} kcal",
+    ]
+    if today_meals:
+        lines.append("Meals logged today:")
+        for meal in today_meals[:12]:
+            lines.append(
+                f"- {meal.meal_slot}: {meal.food.name}, {meal.calories} kcal, "
+                f"P {meal.protein_g}g, C {meal.carbs_g}g, F {meal.fat_g}g"
+            )
+    else:
+        lines.append("Meals logged today: none")
+
+    if upcoming_events:
+        lines.append("Calendar plans for today and next 14 days:")
+        for event in upcoming_events[:16]:
+            time_label = event.scheduled_time or "all day"
+            lines.append(
+                f"- {event.scheduled_date} {time_label}: {event.title} "
+                f"({event.event_type}, {event.status})"
+            )
+    else:
+        lines.append("Calendar plans: none for the next 14 days")
+    return "\n".join(lines)
+
+
+def assistant_calendar_intent(message: str) -> CalendarEventCreateRequest | None:
+    text = normalize_text(message)
+    lowered = text.lower()
+    action_words = (
+        "add",
+        "create",
+        "remind",
+        "calendar",
+        "plan",
+        "добав",
+        "календар",
+        "напом",
+        "замет",
+        "заплан",
+        "añade",
+        "agrega",
+        "calendario",
+        "record",
+        "planifica",
+    )
+    if not any(word in lowered for word in action_words):
+        return None
+
+    scheduled_date = datetime.now(timezone.utc).date()
+    if re.search(r"\b(tomorrow|mañana|завтра)\b", lowered):
+        scheduled_date += timedelta(days=1)
+
+    time_match = re.search(
+        r"(?:\b(?:at|в|a las)\s*)?([01]?\d|2[0-3])(?:[:.](\d{2}))?\b",
+        lowered,
+    )
+    scheduled_time = None
+    if time_match:
+        hour = int(time_match.group(1))
+        minute = int(time_match.group(2) or "00")
+        if 0 <= minute <= 59:
+            scheduled_time = f"{hour:02d}:{minute:02d}"
+
+    title = text
+    cleanup_patterns = [
+        r"^(?:add|create|remind me to|put|plan|calendar)\s+",
+        r"^(?:добавь|добавить|создай|запланируй|напомни|поставь)\s+",
+        r"^(?:añade|agrega|crea|recuérdame|planifica)\s+",
+        r"\b(?:note|заметку|заметка|nota)\b",
+        r"\b(?:to|в|на|in|into|al)\s+(?:my\s+)?(?:calendar|календарь|calendario)\b",
+        r"\b(?:today|сегодня|hoy|tomorrow|завтра|mañana)\b",
+        r"\b(?:at|в|a las)\s*(?:[01]?\d|2[0-3])(?::\d{2})?\b",
+    ]
+    for pattern in cleanup_patterns:
+        title = re.sub(pattern, " ", title, flags=re.I)
+    title = normalize_text(title).strip(" .,-:;")
+    if not title:
+        title = "Plan from Assistant"
+    title = title[:120]
+
+    if scheduled_time is None and not any(word in lowered for word in ("note", "замет", "nota")):
+        return None
+
+    return CalendarEventCreateRequest(
+        event_type="note",
+        title=title,
+        scheduled_date=scheduled_date,
+        scheduled_time=scheduled_time,
+        status="planned",
+        accent="#2bb673",
+    )
+
+
 ASSISTANT_SYSTEM_PROMPT = (
     "You are TrackFood AI, a concise nutrition and planning assistant inside a food tracker. "
     "You are multilingual: answer in the same language the user uses, especially English, Russian, or Spanish. "
     "If the user mixes languages, follow the dominant language or the language they explicitly request. "
     "Help with meal ideas, product choices, diary reflection, calendar planning, and habit building. "
+    "You can use the private app context supplied by the backend: profile, calorie goal, meals, and calendar plans. "
+    "If a calendar action was completed by the backend, clearly say it was added and mention the date/time. "
     "Do not diagnose, treat, or replace medical advice. Keep answers practical and safe. "
     "Write clean plain text only: no Markdown, no asterisks, no bold markers, no bullet glyphs. "
     "Use short paragraphs, clear labels, and numbered steps only when they make the answer easier to scan."
 )
 
 
-def generate_assistant_reply(messages: list[AssistantMessageResponse]) -> str:
+def generate_assistant_reply(
+    messages: list[AssistantMessageResponse],
+    app_context: str,
+    action_note: str = "",
+) -> str:
     if not GEMINI_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2263,8 +2384,12 @@ def generate_assistant_reply(messages: list[AssistantMessageResponse]) -> str:
         }
         for message in messages[-12:]
     ]
+    system_parts = [{"text": ASSISTANT_SYSTEM_PROMPT}, {"text": app_context}]
+    if action_note:
+        system_parts.append({"text": action_note})
+
     payload = {
-        "systemInstruction": {"parts": [{"text": ASSISTANT_SYSTEM_PROMPT}]},
+        "systemInstruction": {"parts": system_parts},
         "contents": contents,
         "generationConfig": {
             "temperature": 0.6,
@@ -2674,7 +2799,21 @@ def create_assistant_message(
     context = get_assistant_context_for_user(user_id, payload.context_id)
     existing = list_assistant_messages_for_user(user_id, context_id=context.id)
     user_message = create_assistant_message_for_user(user_id, context.id, "user", payload.message)
-    reply = generate_assistant_reply([*existing, user_message])
+    action_note = ""
+    calendar_payload = assistant_calendar_intent(payload.message)
+    if calendar_payload is not None:
+        created_event = create_calendar_event_for_user(user_id, calendar_payload)
+        action_note = (
+            "Backend action completed: a calendar note was added. "
+            f"Title: {created_event.title}. Date: {created_event.scheduled_date}. "
+            f"Time: {created_event.scheduled_time or 'all day'}."
+        )
+
+    reply = generate_assistant_reply(
+        [*existing, user_message],
+        build_assistant_app_context(user),
+        action_note,
+    )
     assistant_message = create_assistant_message_for_user(user_id, context.id, "assistant", reply)
     log_security_event("assistant_message", "info", request, user_id, "Assistant reply generated")
     return assistant_message

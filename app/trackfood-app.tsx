@@ -1688,6 +1688,7 @@ export default function TrackFoodApp() {
       setAssistantMessages((current) => [...current, reply]);
       setActiveAssistantContextId(reply.context_id);
       await refreshAssistantContexts(token, reply.context_id);
+      await refreshCalendar(token);
       setStatus("Assistant replied");
     } catch (error) {
       setAssistantError(getErrorMessage(error));

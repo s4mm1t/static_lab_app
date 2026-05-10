@@ -335,6 +335,18 @@ img {
   font-weight: 860;
 }
 
+.topbar .mobile-brand {
+  min-height: 64px;
+  align-items: center;
+}
+
+.topbar .brand-mark.sm {
+  width: 44px;
+  height: 44px;
+  font-size: 0.86rem;
+  transform: translateY(-1px);
+}
+
 .brand > span,
 .mobile-brand > span {
   display: grid;
