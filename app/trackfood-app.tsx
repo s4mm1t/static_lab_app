@@ -151,7 +151,7 @@ type ProfileFormState = {
   activityLevel: ActivityLevel;
 };
 
-const PRODUCT_PAGE_SIZE = 160;
+const PRODUCT_PAGE_SIZE = 1000;
 
 const tabs: { id: TabId; label: string; short: string }[] = [
   { id: "home", label: "Main", short: "Main" },
@@ -283,6 +283,25 @@ function money(food: FoodItem) {
     currency,
     maximumFractionDigits: 2,
   }).format(food.price);
+}
+
+function foodTitle(food: FoodItem) {
+  let name = food.name.split(/\s+-\s+/)[0] ?? food.name;
+  for (const prefix of [food.brand, food.store]) {
+    const cleanedPrefix = prefix?.trim();
+    if (cleanedPrefix && name.toLowerCase().startsWith(cleanedPrefix.toLowerCase())) {
+      name = name.slice(cleanedPrefix.length).replace(/^[-:·\s]+/, "");
+    }
+  }
+  name = name
+    .replace(/^(?:alcampo\s+)?cultivamos\s+lo\s+bueno\s+/i, "")
+    .replace(/\s+¡?haz\s+tu\s+compra\s+online.*$/i, "")
+    .replace(/\s+clase\s+[a-z]\b.*$/i, "")
+    .replace(/\s+cat\.?\s+[a-z]\b.*$/i, "")
+    .replace(/\s+\d+(?:[,.]\d+)?\s*(?:uds?|unidades|packs?|x|kg|g|gr|ml|cl|l)\b.*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return name || food.name;
 }
 
 function getErrorMessage(error: unknown) {
@@ -574,7 +593,7 @@ function MealSection({
             <article className="meal-row" key={meal.id}>
               <FoodVisual food={meal.food} size="sm" />
               <div>
-                <strong>{meal.food.name}</strong>
+                <strong title={meal.food.name}>{foodTitle(meal.food)}</strong>
                 <small>
                   {meal.food.brand || meal.food.store || meal.food.serving_label || "Food"} -
                   {" "}{formatKcal(meal.calories)}
@@ -606,7 +625,7 @@ function ProductRow({
     <button type="button" className="product-row" onClick={() => onSelect(food)}>
       <FoodVisual food={food} />
       <span className="product-main">
-        <strong>{food.name}</strong>
+        <strong title={food.name}>{foodTitle(food)}</strong>
         <small>
           {[food.brand, food.store, food.serving_label].filter(Boolean).join(" - ") ||
             food.detail}
@@ -706,7 +725,7 @@ function PlannerCalendar({
           <article key={meal.id} className="agenda-row">
             <i style={{ backgroundColor: "#2bb673" }} />
             <div>
-              <strong>{meal.food.name}</strong>
+              <strong title={meal.food.name}>{foodTitle(meal.food)}</strong>
               <small>{meal.meal_slot} - {formatKcal(meal.calories)}</small>
             </div>
           </article>
@@ -2186,7 +2205,7 @@ export default function TrackFoodApp() {
                 <div>
                   {recentFoods.map((food) => (
                     <button key={food.id} type="button" onClick={() => chooseFood(food)}>
-                      {food.name}
+                      {foodTitle(food)}
                     </button>
                   ))}
                 </div>
@@ -2243,7 +2262,7 @@ export default function TrackFoodApp() {
               </div>
               <div className="serving-card">
                 <FoodVisual food={selectedFood} size="lg" />
-                <h3>{selectedFood.name}</h3>
+                <h3 title={selectedFood.name}>{foodTitle(selectedFood)}</h3>
                 <p>
                   {[selectedFood.brand, selectedFood.store, selectedFood.serving_label]
                     .filter(Boolean)

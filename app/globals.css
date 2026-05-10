@@ -864,6 +864,8 @@ p {
 }
 
 .meal-section {
+  min-width: 0;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--page-alt);
@@ -918,13 +920,17 @@ p {
 
 .meal-items {
   display: grid;
+  min-width: 0;
   gap: 8px;
   margin-top: 12px;
 }
 
 .meal-row {
   gap: 10px;
+  min-width: 0;
+  max-width: 100%;
   min-height: 64px;
+  overflow: hidden;
   border-top: 1px solid var(--line-soft);
   padding-top: 8px;
 }
@@ -937,6 +943,7 @@ p {
 .meal-row strong,
 .product-row strong {
   display: block;
+  max-width: 100%;
   overflow: hidden;
   color: var(--text);
   line-height: 1.2;
@@ -1169,6 +1176,11 @@ p {
   color: var(--button-text);
   flex: 0 0 auto;
   font-weight: 900;
+  line-height: 1;
+  text-align: center;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, #ffffff 16%, transparent),
+    0 10px 26px color-mix(in srgb, #000000 14%, transparent);
 }
 
 .brand-mark.sm {
@@ -1357,6 +1369,7 @@ p {
 
 .recent-strip div {
   display: flex;
+  min-width: 0;
   gap: 8px;
   overflow-x: auto;
   padding-bottom: 2px;
@@ -1432,7 +1445,10 @@ p {
 
 .product-row {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   gap: 12px;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--page-alt);

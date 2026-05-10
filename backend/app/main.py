@@ -151,6 +151,67 @@ def clean_store(value: str | None) -> str:
     return normalize_text(value or "").replace("_", " ").title()
 
 
+def resolve_external_products_sqlite() -> str:
+    if not EXTERNAL_PRODUCTS_SQLITE:
+        return ""
+    if os.path.exists(EXTERNAL_PRODUCTS_SQLITE):
+        return EXTERNAL_PRODUCTS_SQLITE
+
+    folder = os.path.dirname(EXTERNAL_PRODUCTS_SQLITE)
+    for candidate in ("Combined.sqlite", "Combine.sqlite"):
+        path = os.path.join(folder, candidate)
+        if os.path.exists(path):
+            return path
+    return EXTERNAL_PRODUCTS_SQLITE
+
+
+def query_terms(value: str) -> list[str]:
+    return [
+        term
+        for term in re.findall(r"[0-9a-záéíóúüñç]+", value.lower())
+        if len(term) > 1
+    ]
+
+
+def display_food_name(value: str, brand: str | None = None, store: str | None = None) -> str:
+    original = normalize_text(value)
+    name = re.split(r"\s+-\s+", original, maxsplit=1)[0]
+
+    for prefix in (brand, store):
+        cleaned_prefix = normalize_text(prefix or "")
+        if cleaned_prefix and name.lower().startswith(cleaned_prefix.lower()):
+            name = name[len(cleaned_prefix) :].strip(" -:·")
+
+    noise_patterns = [
+        r"^(?:alcampo\s+)?cultivamos\s+lo\s+bueno\s+",
+        r"^(?:hacendado|mercadona|eroski|dia|carrefour|masymas|alteza|el corte ingles)\s+",
+        r"\s+¡?haz\s+tu\s+compra\s+online.*$",
+        r"\s+\|\s+.*$",
+        r"\s+clase\s+[a-z]\b.*$",
+        r"\s+cat\.?\s+[a-z]\b.*$",
+        r"\s+\d+(?:[,.]\d+)?\s*(?:uds?|unidades|packs?|x|kg|g|gr|ml|cl|l)\b.*$",
+    ]
+    for pattern in noise_patterns:
+        name = re.sub(pattern, "", name, flags=re.I).strip(" -:·")
+
+    name = normalize_text(name)
+    if not name:
+        name = original
+    if name.isupper() and len(name) > 8:
+        name = name.capitalize()
+    return name[:96].rstrip(" -:·")
+
+
+def food_item_from_row(row: dict[str, Any]) -> FoodItem:
+    data = dict(row)
+    data["name"] = display_food_name(
+        str(data.get("name") or ""),
+        data.get("brand"),
+        data.get("store"),
+    )
+    return FoodItem(**data)
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok"]
     service: str
@@ -888,9 +949,10 @@ def upsert_food(cur: psycopg.Cursor[Any], data: dict[str, Any]) -> None:
 
 
 def import_external_products() -> None:
-    if USE_MEMORY_STORAGE or not EXTERNAL_PRODUCTS_SQLITE:
+    external_sqlite = resolve_external_products_sqlite()
+    if USE_MEMORY_STORAGE or not external_sqlite:
         return
-    if not os.path.exists(EXTERNAL_PRODUCTS_SQLITE):
+    if not os.path.exists(external_sqlite):
         return
 
     with connect() as conn:
@@ -900,7 +962,7 @@ def import_external_products() -> None:
             if existing > 100 and not EXTERNAL_PRODUCTS_REFRESH:
                 return
 
-    sqlite_conn = sqlite3.connect(EXTERNAL_PRODUCTS_SQLITE)
+    sqlite_conn = sqlite3.connect(external_sqlite)
     sqlite_conn.row_factory = sqlite3.Row
     rows = sqlite_conn.execute(
         """
@@ -956,9 +1018,10 @@ def import_external_products() -> None:
                     or "per 100 g"
                 )
                 detail_bits = [bit for bit in [brand, store, serving_label] if bit]
+                raw_name = normalize_text(row["name"])
                 data = {
                     "id": f"{store_key}:{external_id}",
-                    "name": normalize_text(row["name"]),
+                    "name": display_food_name(raw_name, brand, store),
                     "detail": " · ".join(detail_bits) or "Product database item",
                     "meal": "Lunch",
                     "image": first_image(row["image_url"]),
@@ -994,12 +1057,13 @@ def count_foods() -> int:
 def list_foods_from_storage(
     q: str | None = None,
     store: str | None = None,
-    limit: int = 160,
+    limit: int = 1000,
     offset: int = 0,
 ) -> list[FoodItem]:
     cleaned_query = assert_clean(q or "")
     cleaned_store = assert_clean(store or "")
-    limit = min(max(limit, 1), 500)
+    terms = query_terms(cleaned_query)
+    limit = min(max(limit, 1), 1000)
     offset = max(offset, 0)
 
     if USE_MEMORY_STORAGE:
@@ -1009,22 +1073,78 @@ def list_foods_from_storage(
             foods = [
                 food
                 for food in foods
-                if needle
-                in f"{food.name} {food.detail} {food.brand or ''} {food.barcode or ''}".lower()
+                if all(
+                    term
+                    in f"{food.name} {food.detail} {food.brand or ''} {food.store or ''} {food.barcode or ''}".lower()
+                    for term in (terms or [needle])
+                )
             ]
-        return foods[offset : offset + limit]
+        return [FoodItem(**(food.model_dump() | {"name": display_food_name(food.name, food.brand, food.store)})) for food in foods[offset : offset + limit]]
 
     filters: list[str] = []
     params: list[Any] = []
     if cleaned_query:
-        filters.append("(name ILIKE %s OR COALESCE(brand, '') ILIKE %s OR COALESCE(barcode, '') ILIKE %s)")
-        like = f"%{cleaned_query}%"
-        params.extend([like, like, like])
+        if terms:
+            term_filters = []
+            for term in terms:
+                term_filters.append(
+                    """
+                    (
+                        name ILIKE %s
+                        OR detail ILIKE %s
+                        OR COALESCE(brand, '') ILIKE %s
+                        OR COALESCE(store, '') ILIKE %s
+                        OR COALESCE(barcode, '') ILIKE %s
+                        OR COALESCE(category_path, '') ILIKE %s
+                    )
+                    """
+                )
+                like = f"%{term}%"
+                params.extend([like, like, like, like, like, like])
+            filters.append(f"({' AND '.join(term_filters)})")
+        else:
+            filters.append("(name ILIKE %s OR COALESCE(brand, '') ILIKE %s OR COALESCE(barcode, '') ILIKE %s)")
+            like = f"%{cleaned_query}%"
+            params.extend([like, like, like])
     if cleaned_store:
         filters.append("store ILIKE %s")
         params.append(f"%{cleaned_store}%")
 
     where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+    order_sql = """
+                    CASE source WHEN 'seed' THEN 0 ELSE 1 END,
+                    CASE WHEN image <> '' THEN 0 ELSE 1 END,
+                    name
+    """
+    order_params: list[Any] = []
+    if cleaned_query:
+        exact = cleaned_query.lower()
+        phrase = f"%{cleaned_query}%"
+        score_bits = [
+            "CASE WHEN lower(COALESCE(barcode, '')) = %s THEN 80 ELSE 0 END",
+            "CASE WHEN lower(name) = %s THEN 60 ELSE 0 END",
+            "CASE WHEN name ILIKE %s THEN 30 ELSE 0 END",
+        ]
+        order_params.extend([exact, exact, phrase])
+        for term in terms or [cleaned_query]:
+            like = f"%{term}%"
+            prefix = f"{term}%"
+            score_bits.extend(
+                [
+                    "CASE WHEN name ILIKE %s THEN 20 ELSE 0 END",
+                    "CASE WHEN name ILIKE %s THEN 10 ELSE 0 END",
+                    "CASE WHEN COALESCE(brand, '') ILIKE %s THEN 5 ELSE 0 END",
+                    "CASE WHEN COALESCE(store, '') ILIKE %s THEN 4 ELSE 0 END",
+                    "CASE WHEN COALESCE(category_path, '') ILIKE %s THEN 2 ELSE 0 END",
+                ]
+            )
+            order_params.extend([prefix, like, like, like, like])
+        order_sql = f"""
+                    ({' + '.join(score_bits)}) DESC,
+                    CASE WHEN image <> '' THEN 0 ELSE 1 END,
+                    LENGTH(name),
+                    name
+        """
 
     with connect() as conn:
         with conn.cursor() as cur:
@@ -1034,15 +1154,13 @@ def list_foods_from_storage(
                 FROM foods
                 {where_sql}
                 ORDER BY
-                    CASE source WHEN 'seed' THEN 0 ELSE 1 END,
-                    CASE WHEN image <> '' THEN 0 ELSE 1 END,
-                    name
+                    {order_sql}
                 LIMIT %s
                 OFFSET %s
                 """,
-                (*params, limit, offset),
+                (*params, *order_params, limit, offset),
             )
-            return [FoodItem(**row) for row in cur.fetchall()]
+            return [food_item_from_row(row) for row in cur.fetchall()]
 
 
 def get_food(food_id: str) -> FoodItem | None:
@@ -1053,7 +1171,7 @@ def get_food(food_id: str) -> FoodItem | None:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM foods WHERE id = %s", (food_id,))
             row = cur.fetchone()
-            return FoodItem(**row) if row else None
+            return food_item_from_row(row) if row else None
 
 
 def to_public_profile(user: dict[str, Any]) -> PublicProfile:
@@ -2365,7 +2483,7 @@ def app_status() -> AppStatusResponse:
 def list_foods(
     q: Annotated[str, Query(max_length=120)] = "",
     store: Annotated[str, Query(max_length=80)] = "",
-    limit: Annotated[int, Query(ge=1, le=500)] = 160,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 1000,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[FoodItem]:
     return list_foods_from_storage(q=q, store=store, limit=limit, offset=offset)

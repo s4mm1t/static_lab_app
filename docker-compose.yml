@@ -70,7 +70,7 @@ services:
       ALLOWED_HOSTS: "localhost,127.0.0.1,testserver,backend,frontend,*.orb.local,192.168.18.40,192.168.18.87"
       CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000,http://192.168.18.40:3000,http://192.168.18.87:3000"
     volumes:
-      - "${TRACKFOODAI_PRODUCT_DB_DIR:-/Volumes/NEYKA SSD/бд для сайта/newbd/Combine (full)}:/external-db:ro"
+      - "${TRACKFOODAI_PRODUCT_DB_DIR:-/Volumes/NEYKA SSD/db for foodtrack_app/newbd/Combine (full)}:/external-db:ro"
     ports:
       - "8000:8000"
     depends_on:
