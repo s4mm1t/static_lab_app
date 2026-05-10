@@ -2342,7 +2342,11 @@ export default function TrackFoodApp() {
               {assistantError && (
                 <div className="assistant-error">
                   <strong>{assistantError}</strong>
-                  <span>Add GEMINI_API_KEY in the backend environment to enable live chat.</span>
+                  <span>
+                    {assistantError === "AI key is not configured"
+                      ? "GEMINI_API_KEY is missing in the backend environment."
+                      : "Backend is configured. Try Sync again or send a new message."}
+                  </span>
                 </div>
               )}
             </div>

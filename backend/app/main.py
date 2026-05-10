@@ -2274,7 +2274,7 @@ def generate_assistant_reply(messages: list[AssistantMessageResponse]) -> str:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
     try:
-        with httpx.Client(timeout=22.0) as client:
+        with httpx.Client(timeout=22.0, trust_env=False) as client:
             response = client.post(
                 url,
                 headers={
