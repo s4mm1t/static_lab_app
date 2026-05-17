@@ -7,6 +7,8 @@ node_modules
 .AppleDouble
 .LSOverride
 npm-debug.log*
+backups
+backups/**
 
 backend/.venv
 backend/app/__pycache__

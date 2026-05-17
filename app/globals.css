@@ -733,6 +733,56 @@ img {
   line-height: 1.55;
 }
 
+.big-add-button {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 54px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 22px;
+  border: 1px solid var(--button-bg);
+  border-radius: 999px;
+  background: var(--button-bg);
+  color: var(--button-text);
+  font-weight: 880;
+  padding: 0 22px;
+}
+
+.latest-meals {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.latest-meals button {
+  display: flex;
+  min-width: 0;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--page-alt);
+  color: var(--text);
+  padding: 0 12px;
+}
+
+.latest-meals strong,
+.latest-meals small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.latest-meals small {
+  color: var(--quiet);
+  font-weight: 780;
+}
+
 .calorie-orbit {
   display: grid;
   width: 138px;
@@ -952,6 +1002,24 @@ p {
   flex: 1;
 }
 
+.meal-row-main {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  min-height: auto;
+  padding: 0;
+  text-align: left;
+}
+
+.meal-row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
 .meal-row strong,
 .product-row strong {
   display: block;
@@ -991,6 +1059,20 @@ p {
 .meal-row button {
   min-height: 34px;
   padding: 0 10px;
+}
+
+.meal-row .meal-row-main {
+  display: grid;
+  min-height: auto;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.meal-row .meal-row-main:hover {
+  box-shadow: none;
+  transform: none;
 }
 
 .empty-meal {
@@ -1285,6 +1367,41 @@ p {
   font-weight: 740;
 }
 
+.inline-scan-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface-soft) 48%, transparent);
+  padding: 12px;
+}
+
+.barcode-camera {
+  display: grid;
+  gap: 10px;
+}
+
+.barcode-camera video {
+  width: 100%;
+  max-height: 220px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #050608;
+  object-fit: cover;
+}
+
+.barcode-camera > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.barcode-camera small {
+  color: var(--muted);
+  font-weight: 740;
+}
+
 .search-form {
   display: grid;
   gap: 8px;
@@ -1313,6 +1430,7 @@ p {
 .auth-form select,
 .profile-edit-form input,
 .profile-edit-form select,
+.data-controls select,
 .planner-form input,
 .scanner-form input,
 .quantity-field input,
@@ -1341,6 +1459,7 @@ p {
 .auth-form select:focus,
 .profile-edit-form input:focus,
 .profile-edit-form select:focus,
+.data-controls select:focus,
 .planner-form input:focus,
 .scanner-form input:focus,
 .quantity-field input:focus,
@@ -1371,6 +1490,11 @@ p {
 .store-row button.is-active {
   background: var(--text);
   color: var(--page);
+}
+
+.quick-food-panel {
+  display: grid;
+  gap: 14px;
 }
 
 .recent-strip {
@@ -1417,6 +1541,12 @@ p {
 .results-toolbar strong {
   color: var(--text);
   font-size: 1rem;
+}
+
+.results-toolbar small {
+  color: var(--quiet);
+  font-size: 0.78rem;
+  font-weight: 760;
 }
 
 .results-toolbar button {
@@ -1548,6 +1678,53 @@ p {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   line-height: 1.5;
+}
+
+.serving-mode,
+.selected-actions,
+.quick-grams {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.serving-mode button,
+.quick-grams button {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--page-alt);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 820;
+  padding: 0 12px;
+}
+
+.serving-mode button.is-active {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+  background: color-mix(in srgb, var(--accent) 14%, var(--page-alt));
+}
+
+.portion-tools {
+  display: grid;
+  gap: 10px;
+}
+
+.quantity-field small {
+  color: var(--quiet);
+  font-size: 0.78rem;
+  font-weight: 740;
+}
+
+.sticky-save-bar {
+  position: sticky;
+  bottom: 12px;
+  z-index: 20;
+  display: grid;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  padding: 4px;
+  backdrop-filter: blur(18px);
 }
 
 .quantity-field {
@@ -2252,6 +2429,63 @@ p {
   margin-top: 18px;
 }
 
+.data-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--page-alt);
+  padding: 14px;
+}
+
+.data-controls > div,
+.data-controls label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: var(--muted);
+  font-weight: 780;
+}
+
+.data-controls strong {
+  color: var(--text);
+}
+
+.data-controls small {
+  color: var(--quiet);
+  line-height: 1.4;
+}
+
+.compact-controls {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  align-items: end;
+  justify-items: center;
+  background: rgba(0, 0, 0, 0.36);
+  padding: 18px;
+  backdrop-filter: blur(16px);
+}
+
+.meal-editor {
+  width: min(100%, 620px);
+  max-height: min(86svh, 760px);
+  overflow: auto;
+  border-radius: 22px;
+}
+
+.danger-soft {
+  color: #ff7a68;
+}
+
 .auth-form label {
   display: grid;
   gap: 8px;
@@ -2315,7 +2549,7 @@ p {
   }
 
   .app-content {
-    padding: 10px 12px 106px;
+    padding: 10px 12px calc(132px + env(safe-area-inset-bottom));
   }
 
   .guest-content {
@@ -2398,6 +2632,8 @@ p {
   .nutrition-grid,
   .profile-summary,
   .secure-card,
+  .data-controls,
+  .compact-controls,
   .add-methods,
   .form-pair,
   .event-edit-row,
@@ -2436,10 +2672,20 @@ p {
 
   .meal-row {
     align-items: flex-start;
+    gap: 8px;
   }
 
-  .meal-row button {
-    margin-left: auto;
+  .meal-row-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .meal-row-main {
+    min-width: 0;
+  }
+
+  .meal-row button:not(.meal-row-main) {
+    margin-left: 0;
   }
 
   .product-row {
@@ -2451,14 +2697,19 @@ p {
     height: 32px;
   }
 
+  .sticky-save-bar {
+    bottom: calc(86px + env(safe-area-inset-bottom));
+    margin-top: 4px;
+  }
+
   .bottom-nav {
     position: fixed;
     right: 10px;
-    bottom: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom));
     left: 10px;
     z-index: 70;
     display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 4px;
     border: 1px solid var(--line);
     border-radius: 8px;

@@ -371,13 +371,26 @@ class ProfileUpdateRequest(BaseModel):
 class MealCreateRequest(BaseModel):
     food_id: str = Field(..., min_length=2, max_length=120)
     meal_slot: MealSlot = "breakfast"
-    serving_multiplier: float = Field(1.0, ge=0.1, le=8.0)
+    serving_multiplier: float = Field(1.0, ge=0.05, le=20.0)
     note: str = Field("", max_length=160)
 
     @field_validator("food_id", "note")
     @classmethod
     def validate_text(cls, value: str) -> str:
         return assert_clean(value)
+
+
+class MealUpdateRequest(BaseModel):
+    food_id: str | None = Field(None, min_length=2, max_length=120)
+    meal_slot: MealSlot | None = None
+    serving_multiplier: float | None = Field(None, ge=0.05, le=20.0)
+    note: str | None = Field(None, max_length=160)
+    logged_at: datetime | None = None
+
+    @field_validator("food_id", "note")
+    @classmethod
+    def validate_text(cls, value: str | None) -> str | None:
+        return assert_clean(value) if value is not None else None
 
 
 class MealLogResponse(BaseModel):
@@ -1494,6 +1507,62 @@ def list_meals_for_user(user_id: str) -> list[MealLogResponse]:
             return [row_to_meal(row) for row in cur.fetchall()]
 
 
+def get_meal_for_user(user_id: str, meal_id: str) -> MealLogResponse | None:
+    if USE_MEMORY_STORAGE:
+        for meal in MEMORY_MEALS_BY_USER[user_id]:
+            if meal["id"] == meal_id:
+                food = get_food(meal["food_id"])
+                if food is None:
+                    return None
+                return meal_response(
+                    meal["id"],
+                    food,
+                    meal["meal_slot"],
+                    meal["serving_multiplier"],
+                    meal["logged_at"],
+                    meal["note"],
+                )
+        return None
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    ml.id AS meal_id,
+                    ml.meal_slot,
+                    ml.serving_multiplier,
+                    ml.logged_at,
+                    ml.note,
+                    f.id AS food_id,
+                    f.name,
+                    f.detail,
+                    f.meal,
+                    f.image,
+                    f.calories,
+                    f.protein_g,
+                    f.carbs_g,
+                    f.fat_g,
+                    f.fiber_g,
+                    f.color,
+                    f.brand,
+                    f.store,
+                    f.barcode,
+                    f.serving_label,
+                    f.price,
+                    f.currency,
+                    f.source
+                FROM meal_logs ml
+                JOIN foods f ON f.id = ml.food_id
+                WHERE ml.user_id = %s AND ml.id = %s
+                LIMIT 1
+                """,
+                (user_id, meal_id),
+            )
+            row = cur.fetchone()
+            return row_to_meal(row) if row else None
+
+
 def create_meal_for_user(user_id: str, payload: MealCreateRequest) -> MealLogResponse:
     food = get_food(payload.food_id)
     if food is None:
@@ -1551,6 +1620,79 @@ def create_meal_for_user(user_id: str, payload: MealCreateRequest) -> MealLogRes
         payload.serving_multiplier,
         logged_at,
         payload.note,
+    )
+
+
+def update_meal_for_user(
+    user_id: str,
+    meal_id: str,
+    payload: MealUpdateRequest,
+) -> MealLogResponse | None:
+    existing = get_meal_for_user(user_id, meal_id)
+    if existing is None:
+        return None
+
+    updates = payload.model_dump(exclude_unset=True)
+    if "food_id" in updates and updates["food_id"] is not None and get_food(updates["food_id"]) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Food item not found",
+        )
+
+    if USE_MEMORY_STORAGE:
+        for meal in MEMORY_MEALS_BY_USER[user_id]:
+            if meal["id"] == meal_id:
+                if payload.food_id is not None:
+                    meal["food_id"] = payload.food_id
+                if payload.meal_slot is not None:
+                    meal["meal_slot"] = payload.meal_slot
+                if payload.serving_multiplier is not None:
+                    meal["serving_multiplier"] = payload.serving_multiplier
+                if payload.note is not None:
+                    meal["note"] = payload.note
+                if payload.logged_at is not None:
+                    meal["logged_at"] = payload.logged_at
+                break
+        return get_meal_for_user(user_id, meal_id)
+
+    columns: list[str] = []
+    values: list[Any] = []
+    field_map = {
+        "food_id": "food_id",
+        "meal_slot": "meal_slot",
+        "serving_multiplier": "serving_multiplier",
+        "note": "note",
+        "logged_at": "logged_at",
+    }
+    for field, column in field_map.items():
+        if field in updates:
+            columns.append(f"{column} = %s")
+            values.append(updates[field])
+
+    if columns:
+        values.extend([meal_id, user_id])
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE meal_logs SET {', '.join(columns)} WHERE id = %s AND user_id = %s",
+                    values,
+                )
+
+    return get_meal_for_user(user_id, meal_id)
+
+
+def duplicate_meal_for_user(user_id: str, meal_id: str) -> MealLogResponse | None:
+    source = get_meal_for_user(user_id, meal_id)
+    if source is None:
+        return None
+    return create_meal_for_user(
+        user_id,
+        MealCreateRequest(
+            food_id=source.food.id,
+            meal_slot=source.meal_slot,
+            serving_multiplier=source.serving_multiplier,
+            note=source.note,
+        ),
     )
 
 
@@ -2359,6 +2501,9 @@ ASSISTANT_SYSTEM_PROMPT = (
     "If the user mixes languages, follow the dominant language or the language they explicitly request. "
     "Help with meal ideas, product choices, diary reflection, calendar planning, and habit building. "
     "You can use the private app context supplied by the backend: profile, calorie goal, meals, and calendar plans. "
+    "When the user asks what they ate, how much is left, or what to eat next, use the listed diary totals and meal names directly. "
+    "When the user describes food without grams or serving size, ask one short clarification or propose a realistic default and say it should be confirmed in the app. "
+    "When useful, suggest concrete app actions like add to diary, edit grams, create a reminder, or duplicate a recent meal. "
     "If a calendar action was completed by the backend, clearly say it was added and mention the date/time. "
     "Do not diagnose, treat, or replace medical advice. Keep answers practical and safe. "
     "Write clean plain text only: no Markdown, no asterisks, no bold markers, no bullet glyphs. "
@@ -2468,6 +2613,10 @@ app.add_middleware(
         ).split(",")
         if origin.strip()
     ],
+    allow_origin_regex=os.getenv(
+        "CORS_ORIGIN_REGEX",
+        r"https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}):3000",
+    ),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
@@ -2938,6 +3087,40 @@ def create_meal(
     user: dict[str, Any] = Depends(get_current_user),
 ) -> MealLogResponse:
     return create_meal_for_user(str(user["id"]), payload)
+
+
+@app.patch("/api/v1/meals/{meal_id}", response_model=MealLogResponse, tags=["Meals"])
+def update_meal(
+    meal_id: str,
+    payload: MealUpdateRequest,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> MealLogResponse:
+    meal = update_meal_for_user(str(user["id"]), meal_id, payload)
+    if meal is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Meal log not found",
+        )
+    return meal
+
+
+@app.post(
+    "/api/v1/meals/{meal_id}/duplicate",
+    response_model=MealLogResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Meals"],
+)
+def duplicate_meal(
+    meal_id: str,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> MealLogResponse:
+    meal = duplicate_meal_for_user(str(user["id"]), meal_id)
+    if meal is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Meal log not found",
+        )
+    return meal
 
 
 @app.delete("/api/v1/meals/{meal_id}", tags=["Meals"])

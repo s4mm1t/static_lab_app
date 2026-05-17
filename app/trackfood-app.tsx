@@ -2,13 +2,15 @@
 
 import Image from "next/image";
 import type { CSSProperties } from "react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type Theme = "light" | "dark";
 type ActivityLevel = "light" | "balanced" | "active";
 type AuthMode = "register" | "login";
 type TabId = "home" | "diary" | "search" | "calendar" | "assistant" | "insights" | "profile";
 type MealSlot = "breakfast" | "lunch" | "dinner" | "snack";
+type ServingMode = "grams" | "serving" | "package";
+type ScanMode = "search" | "barcode" | "photo";
 type CalendarEventType = "meal" | "training" | "task" | "note";
 type CalendarEventStatus = "planned" | "done" | "skipped";
 type UserRole = "user" | "admin";
@@ -163,6 +165,14 @@ const tabs: { id: TabId; label: string; short: string }[] = [
   { id: "profile", label: "Profile", short: "Me" },
 ];
 
+const mobileTabs: { id: TabId; label: string; short: string }[] = [
+  { id: "home", label: "Today", short: "Today" },
+  { id: "search", label: "Add", short: "Add" },
+  { id: "diary", label: "Diary", short: "Diary" },
+  { id: "assistant", label: "AI", short: "AI" },
+  { id: "profile", label: "Profile", short: "Me" },
+];
+
 const mealSlots: {
   id: MealSlot;
   label: string;
@@ -248,6 +258,10 @@ function formatKcal(value: number) {
   return `${Math.round(value).toLocaleString()} kcal`;
 }
 
+function formatMacro(value: number) {
+  return `${Math.round(value)}g`;
+}
+
 function dateKey(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -302,6 +316,26 @@ function foodTitle(food: FoodItem) {
     .replace(/\s+/g, " ")
     .trim();
   return name || food.name;
+}
+
+function scaledFood(food: FoodItem, multiplier: number) {
+  return {
+    calories: Math.round(food.calories * multiplier),
+    protein_g: Math.round(food.protein_g * multiplier),
+    carbs_g: Math.round(food.carbs_g * multiplier),
+    fat_g: Math.round(food.fat_g * multiplier),
+    fiber_g: Math.round(food.fiber_g * multiplier),
+  };
+}
+
+function toDateTimeLocal(value: string) {
+  const date = new Date(value);
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+function fromDateTimeLocal(value: string) {
+  return value ? new Date(value).toISOString() : undefined;
 }
 
 function getErrorMessage(error: unknown) {
@@ -555,11 +589,13 @@ function MealSection({
   slot,
   meals,
   onAdd,
+  onEdit,
   onDelete,
 }: {
   slot: (typeof mealSlots)[number];
   meals: MealLog[];
   onAdd: (slot: MealSlot) => void;
+  onEdit: (meal: MealLog) => void;
   onDelete: (mealId: string) => void;
 }) {
   const totals = meals.reduce(
@@ -592,16 +628,21 @@ function MealSection({
           meals.map((meal) => (
             <article className="meal-row" key={meal.id}>
               <FoodVisual food={meal.food} size="sm" />
-              <div>
+              <button type="button" className="meal-row-main" onClick={() => onEdit(meal)}>
                 <strong title={meal.food.name}>{foodTitle(meal.food)}</strong>
                 <small>
                   {meal.food.brand || meal.food.store || meal.food.serving_label || "Food"} -
                   {" "}{formatKcal(meal.calories)}
                 </small>
-              </div>
-              <button type="button" onClick={() => onDelete(meal.id)}>
-                Remove
               </button>
+              <div className="meal-row-actions">
+                <button type="button" onClick={() => onEdit(meal)}>
+                  Edit
+                </button>
+                <button type="button" onClick={() => onDelete(meal.id)}>
+                  Remove
+                </button>
+              </div>
             </article>
           ))
         ) : (
@@ -987,7 +1028,7 @@ function BottomNav({
 }) {
   return (
     <nav className="bottom-nav" aria-label="Mobile navigation">
-      {tabs.map((tab) => (
+      {mobileTabs.map((tab) => (
         <button
           key={tab.id}
           type="button"
@@ -1003,6 +1044,8 @@ function BottomNav({
 }
 
 export default function TrackFoodApp() {
+  const barcodeVideoRef = useRef<HTMLVideoElement | null>(null);
+  const barcodeStreamRef = useRef<MediaStream | null>(null);
   const [theme, setTheme] = useState<Theme>("light");
   const [isHydrated, setIsHydrated] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>("home");
@@ -1020,7 +1063,21 @@ export default function TrackFoodApp() {
   const [isFoodListOpen, setIsFoodListOpen] = useState(false);
   const [foodOffset, setFoodOffset] = useState(0);
   const [canLoadMoreFoods, setCanLoadMoreFoods] = useState(true);
+  const [isFoodLoading, setIsFoodLoading] = useState(false);
+  const [foodSearchError, setFoodSearchError] = useState("");
+  const [lastFoodQuery, setLastFoodQuery] = useState("");
   const [quantity, setQuantity] = useState("1");
+  const [servingMode, setServingMode] = useState<ServingMode>("grams");
+  const [grams, setGrams] = useState("100");
+  const [packageMultiplier, setPackageMultiplier] = useState("1");
+  const [editingMeal, setEditingMeal] = useState<MealLog | null>(null);
+  const [editGrams, setEditGrams] = useState("100");
+  const [editMealSlot, setEditMealSlot] = useState<MealSlot>("breakfast");
+  const [editLoggedAt, setEditLoggedAt] = useState("");
+  const [savedFoodIds, setSavedFoodIds] = useState<string[]>([]);
+  const [scanMode, setScanMode] = useState<ScanMode>("search");
+  const [barcodeScanError, setBarcodeScanError] = useState("");
+  const [isBarcodeScanning, setIsBarcodeScanning] = useState(false);
   const [estimateText, setEstimateText] = useState("");
   const [estimate, setEstimate] = useState<NutritionEstimate | null>(null);
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
@@ -1093,6 +1150,37 @@ export default function TrackFoodApp() {
       })
       .slice(0, 6);
   }, [meals]);
+  const mostEatenFoods = useMemo(() => {
+    const counts = new Map<string, { food: FoodItem; count: number }>();
+    for (const meal of meals) {
+      const current = counts.get(meal.food.id);
+      counts.set(meal.food.id, {
+        food: meal.food,
+        count: (current?.count ?? 0) + 1,
+      });
+    }
+    return Array.from(counts.values())
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 6);
+  }, [meals]);
+  const savedFoods = useMemo(() => {
+    const sources = [...foods, ...meals.map((meal) => meal.food)];
+    const byId = new Map(sources.map((food) => [food.id, food]));
+    return savedFoodIds.map((id) => byId.get(id)).filter(Boolean).slice(0, 8) as FoodItem[];
+  }, [foods, meals, savedFoodIds]);
+  const servingMultiplier = useMemo(() => {
+    if (servingMode === "grams") {
+      return clamp((Number(grams) || 100) / 100, 0.05, 20);
+    }
+    if (servingMode === "package") {
+      return clamp(Number(packageMultiplier) || 1, 0.05, 20);
+    }
+    return clamp(Number(quantity) || 1, 0.05, 20);
+  }, [grams, packageMultiplier, quantity, servingMode]);
+  const selectedNutrition = useMemo(
+    () => (selectedFood ? scaledFood(selectedFood, servingMultiplier) : null),
+    [selectedFood, servingMultiplier],
+  );
 
   const selectedDayEvents = useMemo(
     () => calendarEvents.filter((event) => event.scheduled_date === selectedDate),
@@ -1117,11 +1205,19 @@ export default function TrackFoodApp() {
       const savedTheme = window.localStorage.getItem("trackfood-theme") as Theme | null;
       const savedToken = window.localStorage.getItem("trackfood-token");
       const savedProfile = readStoredProfile();
+      const savedFoodRaw = window.localStorage.getItem("trackfood-saved-foods");
       const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
 
       setTheme(savedTheme ?? (prefersDark ? "dark" : "light"));
       setToken(savedToken);
       setProfile(savedProfile);
+      if (savedFoodRaw) {
+        try {
+          setSavedFoodIds(JSON.parse(savedFoodRaw) as string[]);
+        } catch {
+          setSavedFoodIds([]);
+        }
+      }
 
       if (savedProfile) {
         setAuthForm((current) => ({
@@ -1198,6 +1294,32 @@ export default function TrackFoodApp() {
   }, [theme]);
 
   useEffect(() => {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {
+        // Offline support is progressive; app still works without SW registration.
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isHydrated) {
+      window.localStorage.setItem("trackfood-saved-foods", JSON.stringify(savedFoodIds));
+    }
+  }, [isHydrated, savedFoodIds]);
+
+  useEffect(() => {
+    if (!isHydrated || !token) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void loadFoods(query, storeFilter, 0, { silent: true });
+    }, 360);
+    return () => window.clearTimeout(timer);
+    // loadFoods intentionally reads stable state through params.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHydrated, query, storeFilter, token]);
+
+  useEffect(() => {
     let frame = 0;
     const updateDepth = () => {
       frame = 0;
@@ -1219,7 +1341,12 @@ export default function TrackFoodApp() {
     };
   }, []);
 
-  async function loadFoods(nextQuery = query, nextStore = storeFilter, nextOffset = 0) {
+  async function loadFoods(
+    nextQuery = query,
+    nextStore = storeFilter,
+    nextOffset = 0,
+    options: { silent?: boolean } = {},
+  ) {
     const params = new URLSearchParams();
     if (nextQuery.trim()) {
       params.set("q", nextQuery.trim());
@@ -1231,16 +1358,29 @@ export default function TrackFoodApp() {
     params.set("offset", String(nextOffset));
 
     try {
+      setIsFoodLoading(true);
+      setFoodSearchError("");
+      setLastFoodQuery(nextQuery.trim());
       const items = await apiRequest<FoodItem[]>(`/api/v1/foods?${params.toString()}`);
+      const shouldUseFallback = !nextOffset && !nextQuery.trim() && !nextStore.trim() && !items.length;
       setFoods((current) =>
-        nextOffset > 0 ? [...current, ...items] : items.length ? items : fallbackFoods,
+        nextOffset > 0 ? [...current, ...items] : shouldUseFallback ? fallbackFoods : items,
       );
       setFoodOffset(nextOffset + items.length);
       setCanLoadMoreFoods(items.length === PRODUCT_PAGE_SIZE);
-      setStatus(items.length > 10 ? `${nextOffset + items.length} products loaded` : "Product database ready");
+      if (!options.silent) {
+        setStatus(
+          items.length > 10
+            ? `${nextOffset + items.length}${items.length === PRODUCT_PAGE_SIZE ? "+" : ""} products`
+            : "Product database ready",
+        );
+      }
     } catch (error) {
       setFoods(fallbackFoods);
+      setFoodSearchError(getErrorMessage(error));
       setStatus(getErrorMessage(error));
+    } finally {
+      setIsFoodLoading(false);
     }
   }
 
@@ -1353,6 +1493,7 @@ export default function TrackFoodApp() {
   function chooseFood(food: FoodItem) {
     setSelectedFood(food);
     setIsFoodListOpen(false);
+    setScanMode("search");
   }
 
   async function saveSelectedFood() {
@@ -1365,7 +1506,6 @@ export default function TrackFoodApp() {
       return;
     }
 
-    const serving_multiplier = clamp(Number(quantity) || 1, 0.1, 8);
     try {
       const meal = await apiRequest<MealLog>(
         "/api/v1/meals",
@@ -1374,7 +1514,7 @@ export default function TrackFoodApp() {
           body: JSON.stringify({
             food_id: selectedFood.id,
             meal_slot: activeMealSlot,
-            serving_multiplier,
+            serving_multiplier: servingMultiplier,
           }),
         },
         token,
@@ -1382,8 +1522,96 @@ export default function TrackFoodApp() {
       setMeals((current) => [meal, ...current]);
       setSelectedFood(null);
       setQuantity("1");
+      setGrams("100");
+      setPackageMultiplier("1");
       setStatus("Added to diary");
       navigate("diary");
+    } catch (error) {
+      setStatus(getErrorMessage(error));
+    }
+  }
+
+  function toggleSavedFood(food: FoodItem) {
+    setSavedFoodIds((current) =>
+      current.includes(food.id)
+        ? current.filter((id) => id !== food.id)
+        : [food.id, ...current].slice(0, 24),
+    );
+  }
+
+  async function quickRelog(food: FoodItem, slot = activeMealSlot) {
+    if (!token) {
+      navigate("profile");
+      setStatus("Login to relog meals");
+      return;
+    }
+    try {
+      const meal = await apiRequest<MealLog>(
+        "/api/v1/meals",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            food_id: food.id,
+            meal_slot: slot,
+            serving_multiplier: 1,
+          }),
+        },
+        token,
+      );
+      setMeals((current) => [meal, ...current]);
+      setStatus(`${foodTitle(food)} relogged`);
+    } catch (error) {
+      setStatus(getErrorMessage(error));
+    }
+  }
+
+  function openMealEditor(meal: MealLog) {
+    setEditingMeal(meal);
+    setEditMealSlot(meal.meal_slot);
+    setEditGrams(String(Math.max(Math.round(meal.serving_multiplier * 100), 1)));
+    setEditLoggedAt(toDateTimeLocal(meal.logged_at));
+  }
+
+  async function saveEditedMeal() {
+    if (!token || !editingMeal) {
+      return;
+    }
+    try {
+      const updated = await apiRequest<MealLog>(
+        `/api/v1/meals/${editingMeal.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            meal_slot: editMealSlot,
+            serving_multiplier: clamp((Number(editGrams) || 100) / 100, 0.05, 20),
+            logged_at: fromDateTimeLocal(editLoggedAt),
+          }),
+        },
+        token,
+      );
+      setMeals((current) =>
+        current.map((meal) => (meal.id === updated.id ? updated : meal)),
+      );
+      setEditingMeal(null);
+      setStatus("Meal updated");
+    } catch (error) {
+      setStatus(getErrorMessage(error));
+    }
+  }
+
+  async function duplicateMeal(mealId = editingMeal?.id) {
+    if (!token || !mealId) {
+      return;
+    }
+    try {
+      const duplicated = await apiRequest<MealLog>(
+        `/api/v1/meals/${mealId}/duplicate`,
+        { method: "POST" },
+        token,
+      );
+      setMeals((current) => [duplicated, ...current]);
+      setEditingMeal(null);
+      setStatus("Meal duplicated");
     } catch (error) {
       setStatus(getErrorMessage(error));
     }
@@ -1401,9 +1629,75 @@ export default function TrackFoodApp() {
         token,
       );
       setMeals((current) => current.filter((meal) => meal.id !== mealId));
+      if (editingMeal?.id === mealId) {
+        setEditingMeal(null);
+      }
       setStatus("Meal removed");
     } catch (error) {
       setStatus(getErrorMessage(error));
+    }
+  }
+
+  function stopBarcodeScanner() {
+    barcodeStreamRef.current?.getTracks().forEach((track) => track.stop());
+    barcodeStreamRef.current = null;
+    setIsBarcodeScanning(false);
+  }
+
+  async function startBarcodeScanner() {
+    setBarcodeScanError("");
+    if (typeof window === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setBarcodeScanError("Camera is not available in this browser.");
+      return;
+    }
+    const BarcodeDetectorCtor = (
+      window as unknown as {
+        BarcodeDetector?: new (options?: { formats?: string[] }) => {
+          detect: (source: HTMLVideoElement) => Promise<Array<{ rawValue?: string }>>;
+        };
+      }
+    ).BarcodeDetector;
+    if (!BarcodeDetectorCtor) {
+      setBarcodeScanError("Barcode camera scan is not supported here. Enter the barcode manually.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+      });
+      barcodeStreamRef.current = stream;
+      setIsBarcodeScanning(true);
+      const video = barcodeVideoRef.current;
+      if (!video) {
+        stopBarcodeScanner();
+        return;
+      }
+      video.srcObject = stream;
+      await video.play();
+      const detector = new BarcodeDetectorCtor({
+        formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128"],
+      });
+      const scan = async () => {
+        if (!barcodeStreamRef.current || !barcodeVideoRef.current) {
+          return;
+        }
+        const results = await detector.detect(barcodeVideoRef.current);
+        const code = results[0]?.rawValue;
+        if (code) {
+          stopBarcodeScanner();
+          setBarcodeText(code);
+          setQuery(code);
+          await loadFoods(code, "", 0);
+          setIsFoodListOpen(true);
+          return;
+        }
+        window.requestAnimationFrame(() => void scan());
+      };
+      await scan();
+    } catch (error) {
+      stopBarcodeScanner();
+      setBarcodeScanError(getErrorMessage(error));
     }
   }
 
@@ -1466,6 +1760,23 @@ export default function TrackFoodApp() {
     window.localStorage.removeItem("trackfood-token");
     window.localStorage.removeItem("trackfood-profile");
     setStatus("Logged out");
+  }
+
+  function exportAccountData() {
+    const payload = {
+      profile,
+      meals,
+      calendarEvents,
+      assistantContexts,
+      exported_at: new Date().toISOString(),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "trackfood-ai-account-export.json";
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
@@ -1649,6 +1960,12 @@ export default function TrackFoodApp() {
         body: JSON.stringify({ description }),
       });
       setEstimate(payload);
+      const matches = await apiRequest<FoodItem[]>(
+        `/api/v1/foods?q=${encodeURIComponent(payload.label)}&limit=8`,
+      );
+      if (matches[0]) {
+        chooseFood(matches[0]);
+      }
       setStatus("Photo trial estimate ready");
     } catch (error) {
       setStatus(getErrorMessage(error));
@@ -1894,6 +2211,9 @@ export default function TrackFoodApp() {
                     ? `${profile.name.split(" ")[0]}, ${formatKcal(remaining)} left today.`
                     : "Create your account and TrackFood AI will sync diary, plans, and meals."}
                 </p>
+                <button type="button" className="big-add-button" onClick={() => openAdd("breakfast")}>
+                  + Add food
+                </button>
               </div>
               <div
                 className="calorie-orbit"
@@ -1960,6 +2280,17 @@ export default function TrackFoodApp() {
                 <MacroLine label="Carbs" value={totals.carbs} goal={240} color="#4f86f7" />
                 <MacroLine label="Fat" value={totals.fat} goal={70} color="#ff795e" />
               </div>
+              {meals.length > 0 && (
+                <div className="latest-meals">
+                  <span className="eyebrow">Latest meals</span>
+                  {meals.slice(0, 3).map((meal) => (
+                    <button key={meal.id} type="button" onClick={() => openMealEditor(meal)}>
+                      <strong>{foodTitle(meal.food)}</strong>
+                      <small>{formatKcal(meal.calories)}</small>
+                    </button>
+                  ))}
+                </div>
+              )}
             </section>
           </section>
         )}
@@ -2006,6 +2337,7 @@ export default function TrackFoodApp() {
                   slot={slot}
                   meals={meals.filter((meal) => meal.meal_slot === slot.id)}
                   onAdd={openAdd}
+                  onEdit={openMealEditor}
                   onDelete={deleteMeal}
                 />
               ))}
@@ -2145,19 +2477,102 @@ export default function TrackFoodApp() {
             </div>
 
             <div className="add-methods">
-              <button type="button" className="method-card active">
+              <button
+                type="button"
+                className={scanMode === "search" ? "method-card active" : "method-card"}
+                onClick={() => setScanMode("search")}
+              >
                 <strong>Search</strong>
                 <span>Products and brands</span>
               </button>
-              <button type="button" className="method-card">
+              <button
+                type="button"
+                className={scanMode === "barcode" ? "method-card active" : "method-card"}
+                onClick={() => setScanMode("barcode")}
+              >
                 <strong>Barcode</strong>
-                <span>Scanner hook next</span>
+                <span>Camera or manual code</span>
               </button>
-              <button type="button" className="method-card">
+              <button
+                type="button"
+                className={scanMode === "photo" ? "method-card active" : "method-card"}
+                onClick={() => setScanMode("photo")}
+              >
                 <strong>Photo</strong>
-                <span>AI vision slot</span>
+                <span>Upload or camera</span>
               </button>
             </div>
+
+            {scanMode === "barcode" && (
+              <section className="inline-scan-panel">
+                <form className="scanner-form" onSubmit={handleBarcodeSearch}>
+                  <label>
+                    Barcode
+                    <div>
+                      <input
+                        value={barcodeText}
+                        onChange={(event) => setBarcodeText(event.target.value)}
+                        inputMode="numeric"
+                        placeholder="843700..."
+                      />
+                      <button type="submit">Find</button>
+                    </div>
+                  </label>
+                </form>
+                <div className="barcode-camera">
+                  <video ref={barcodeVideoRef} muted playsInline />
+                  <div>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => void startBarcodeScanner()}
+                      disabled={isBarcodeScanning}
+                    >
+                      {isBarcodeScanning ? "Scanning..." : "Scan with camera"}
+                    </button>
+                    {isBarcodeScanning && (
+                      <button type="button" className="secondary-button" onClick={stopBarcodeScanner}>
+                        Stop
+                      </button>
+                    )}
+                  </div>
+                  {barcodeScanError && <small>{barcodeScanError}</small>}
+                </div>
+              </section>
+            )}
+
+            {scanMode === "photo" && (
+              <section className="inline-scan-panel">
+                <form className="photo-form" onSubmit={handlePhotoEstimate}>
+                  <label className="photo-drop">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        setPhotoPreview(file ? URL.createObjectURL(file) : null);
+                      }}
+                    />
+                    {photoPreview ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={photoPreview} alt="" />
+                    ) : (
+                      <span>Tap to add food photo</span>
+                    )}
+                  </label>
+                  <button type="submit" className="primary-button wide">
+                    Estimate and match
+                  </button>
+                </form>
+                {estimate && (
+                  <div className="estimate-result compact-result">
+                    <strong>{estimate.label}</strong>
+                    <span>{formatKcal(estimate.calories)} ready to confirm</span>
+                  </div>
+                )}
+              </section>
+            )}
 
             <form className="search-form" onSubmit={handleSearch}>
               <label htmlFor="food-search">Search product database</label>
@@ -2200,23 +2615,58 @@ export default function TrackFoodApp() {
               ))}
             </div>
 
-            {recentFoods.length > 0 && (
-              <div className="recent-strip">
-                <span>Recent</span>
-                <div>
-                  {recentFoods.map((food) => (
-                    <button key={food.id} type="button" onClick={() => chooseFood(food)}>
-                      {foodTitle(food)}
-                    </button>
-                  ))}
-                </div>
+            {(recentFoods.length > 0 || mostEatenFoods.length > 0 || savedFoods.length > 0) && (
+              <div className="quick-food-panel">
+                {recentFoods.length > 0 && (
+                  <div className="recent-strip">
+                    <span>Recently eaten</span>
+                    <div>
+                      {recentFoods.map((food) => (
+                        <button key={food.id} type="button" onClick={() => void quickRelog(food)}>
+                          {foodTitle(food)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {mostEatenFoods.length > 0 && (
+                  <div className="recent-strip">
+                    <span>Most eaten</span>
+                    <div>
+                      {mostEatenFoods.map(({ food, count }) => (
+                        <button key={food.id} type="button" onClick={() => void quickRelog(food)}>
+                          {foodTitle(food)} · {count}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {savedFoods.length > 0 && (
+                  <div className="recent-strip">
+                    <span>Saved meals</span>
+                    <div>
+                      {savedFoods.map((food) => (
+                        <button key={food.id} type="button" onClick={() => chooseFood(food)}>
+                          {foodTitle(food)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
             <div className="results-toolbar">
               <div>
                 <span className="eyebrow">Results</span>
-                <strong>{foods.length} products loaded</strong>
+                <strong>
+                  {isFoodLoading
+                    ? "Loading products..."
+                    : `${foods.length}${canLoadMoreFoods ? "+" : ""} products`}
+                </strong>
+                <small>
+                  {lastFoodQuery ? `Search: ${lastFoodQuery}` : "Local database"}
+                </small>
               </div>
               <button type="button" onClick={() => setIsFoodListOpen((current) => !current)}>
                 {isFoodListOpen ? "Hide list" : "Show list"}
@@ -2225,12 +2675,16 @@ export default function TrackFoodApp() {
 
             {isFoodListOpen ? (
               <div className="product-list">
+                {foodSearchError && <div className="empty-state compact">{foodSearchError}</div>}
+                {!foodSearchError && !foods.length && !isFoodLoading && (
+                  <div className="empty-state compact">No products found. Try another name or barcode.</div>
+                )}
                 {foods.map((food) => (
                   <ProductRow key={food.id} food={food} onSelect={chooseFood} />
                 ))}
                 {canLoadMoreFoods && (
                   <button type="button" className="load-more" onClick={loadMoreFoods}>
-                    Load more products
+                    {isFoodLoading ? "Loading..." : "Load more products"}
                   </button>
                 )}
               </div>
@@ -2240,7 +2694,7 @@ export default function TrackFoodApp() {
                 className="collapsed-results"
                 onClick={() => setIsFoodListOpen(true)}
               >
-                Product list hidden. Tap to show {foods.length} loaded products.
+                Product list hidden. Tap to show {foods.length}{canLoadMoreFoods ? "+" : ""} products.
               </button>
             )}
           </section>
@@ -2270,22 +2724,89 @@ export default function TrackFoodApp() {
                     .join(" - ") || selectedFood.detail}
                 </p>
                 <div className="nutrition-grid">
-                  <StatTile label="Calories" value={formatKcal(selectedFood.calories)} detail="base" />
-                  <StatTile label="Protein" value={`${selectedFood.protein_g}g`} detail="base" />
-                  <StatTile label="Carbs" value={`${selectedFood.carbs_g}g`} detail="base" />
-                  <StatTile label="Fat" value={`${selectedFood.fat_g}g`} detail="base" />
-                </div>
-                <label className="quantity-field">
-                  Quantity
-                  <input
-                    type="number"
-                    min="0.1"
-                    max="8"
-                    step="0.1"
-                    value={quantity}
-                    onChange={(event) => setQuantity(event.target.value)}
+                  <StatTile
+                    label="Calories"
+                    value={formatKcal(selectedNutrition?.calories ?? selectedFood.calories)}
+                    detail="live"
                   />
-                </label>
+                  <StatTile
+                    label="Protein"
+                    value={formatMacro(selectedNutrition?.protein_g ?? selectedFood.protein_g)}
+                    detail="live"
+                  />
+                  <StatTile
+                    label="Carbs"
+                    value={formatMacro(selectedNutrition?.carbs_g ?? selectedFood.carbs_g)}
+                    detail="live"
+                  />
+                  <StatTile
+                    label="Fat"
+                    value={formatMacro(selectedNutrition?.fat_g ?? selectedFood.fat_g)}
+                    detail="live"
+                  />
+                </div>
+                <div className="serving-mode" aria-label="Serving mode">
+                  {(["grams", "serving", "package"] as ServingMode[]).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={servingMode === mode ? "is-active" : ""}
+                      onClick={() => setServingMode(mode)}
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
+                {servingMode === "grams" && (
+                  <div className="portion-tools">
+                    <label className="quantity-field">
+                      Grams
+                      <input
+                        type="number"
+                        min="1"
+                        max="2000"
+                        step="1"
+                        value={grams}
+                        onChange={(event) => setGrams(event.target.value)}
+                      />
+                    </label>
+                    <div className="quick-grams">
+                      {[50, 100, 150, 200].map((value) => (
+                        <button key={value} type="button" onClick={() => setGrams(String(value))}>
+                          {value}g
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {servingMode === "serving" && (
+                  <label className="quantity-field">
+                    Servings
+                    <input
+                      type="number"
+                      min="0.1"
+                      max="20"
+                      step="0.1"
+                      value={quantity}
+                      onChange={(event) => setQuantity(event.target.value)}
+                    />
+                    <small>{selectedFood.serving_label || "1 serving"}</small>
+                  </label>
+                )}
+                {servingMode === "package" && (
+                  <label className="quantity-field">
+                    Packages
+                    <input
+                      type="number"
+                      min="0.05"
+                      max="20"
+                      step="0.05"
+                      value={packageMultiplier}
+                      onChange={(event) => setPackageMultiplier(event.target.value)}
+                    />
+                    <small>Use when the base product is one pack.</small>
+                  </label>
+                )}
                 <div className="slot-picker">
                   {mealSlots.map((slot) => (
                     <button
@@ -2298,9 +2819,19 @@ export default function TrackFoodApp() {
                     </button>
                   ))}
                 </div>
-                <button type="button" className="primary-button wide" onClick={saveSelectedFood}>
-                  Save to diary
-                </button>
+                <div className="selected-actions">
+                  <button type="button" className="secondary-button" onClick={() => toggleSavedFood(selectedFood)}>
+                    {savedFoodIds.includes(selectedFood.id) ? "Saved" : "Save meal"}
+                  </button>
+                  <button type="button" className="secondary-button" onClick={() => void quickRelog(selectedFood)}>
+                    One-tap relog
+                  </button>
+                </div>
+                <div className="sticky-save-bar">
+                  <button type="button" className="primary-button wide" onClick={saveSelectedFood}>
+                    Save to diary
+                  </button>
+                </div>
                 {money(selectedFood) && <small className="price-note">{money(selectedFood)}</small>}
               </div>
             </aside>
@@ -2618,6 +3149,39 @@ export default function TrackFoodApp() {
               </div>
             </div>
 
+            <div className="data-controls">
+              <div>
+                <span className="eyebrow">Privacy</span>
+                <strong>Account data</strong>
+                <small>Export your profile, diary, plans, and assistant contexts.</small>
+              </div>
+              <button type="button" className="secondary-button" onClick={exportAccountData}>
+                Export JSON
+              </button>
+              <button type="button" className="secondary-button danger-soft" onClick={logout}>
+                Sign out device
+              </button>
+            </div>
+
+            <div className="data-controls compact-controls">
+              <label>
+                Units
+                <select defaultValue="metric">
+                  <option value="metric">Metric · grams / kg</option>
+                  <option value="imperial">Imperial · oz / lb</option>
+                </select>
+              </label>
+              <label>
+                Language
+                <select defaultValue="auto">
+                  <option value="auto">Auto</option>
+                  <option value="ru">Russian</option>
+                  <option value="en">English</option>
+                  <option value="es">Spanish</option>
+                </select>
+              </label>
+            </div>
+
             {profile?.role === "admin" && (
               <section className="security-admin">
                 <div className="panel-heading">
@@ -2729,6 +3293,88 @@ export default function TrackFoodApp() {
             <p className="status-text">{status}</p>
           </section>
         </section>
+        )}
+
+        {editingMeal && (
+          <div className="modal-backdrop" role="dialog" aria-modal="true">
+            <section className="panel meal-editor">
+              <div className="panel-heading">
+                <div>
+                  <span className="eyebrow">Edit diary food</span>
+                  <h2 title={editingMeal.food.name}>{foodTitle(editingMeal.food)}</h2>
+                </div>
+                <button
+                  type="button"
+                  className="close-panel"
+                  aria-label="Close editor"
+                  onClick={() => setEditingMeal(null)}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="nutrition-grid">
+                <StatTile
+                  label="Calories"
+                  value={formatKcal(scaledFood(editingMeal.food, clamp((Number(editGrams) || 100) / 100, 0.05, 20)).calories)}
+                  detail="edited"
+                />
+                <StatTile label="Current" value={`${editGrams}g`} detail="portion" />
+              </div>
+              <div className="portion-tools">
+                <label className="quantity-field">
+                  Grams
+                  <input
+                    type="number"
+                    min="1"
+                    max="2000"
+                    value={editGrams}
+                    onChange={(event) => setEditGrams(event.target.value)}
+                  />
+                </label>
+                <div className="quick-grams">
+                  {[50, 100, 150, 200].map((value) => (
+                    <button key={value} type="button" onClick={() => setEditGrams(String(value))}>
+                      {value}g
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="slot-picker">
+                {mealSlots.map((slot) => (
+                  <button
+                    key={slot.id}
+                    type="button"
+                    className={editMealSlot === slot.id ? "is-active" : ""}
+                    onClick={() => setEditMealSlot(slot.id)}
+                  >
+                    {slot.label}
+                  </button>
+                ))}
+              </div>
+              <label className="quantity-field">
+                Time
+                <input
+                  type="datetime-local"
+                  value={editLoggedAt}
+                  onChange={(event) => setEditLoggedAt(event.target.value)}
+                />
+              </label>
+              <div className="selected-actions">
+                <button type="button" className="secondary-button" onClick={() => toggleSavedFood(editingMeal.food)}>
+                  {savedFoodIds.includes(editingMeal.food.id) ? "Saved meal" : "Save as meal"}
+                </button>
+                <button type="button" className="secondary-button" onClick={() => void duplicateMeal()}>
+                  Duplicate
+                </button>
+                <button type="button" className="danger-soft secondary-button" onClick={() => void deleteMeal(editingMeal.id)}>
+                  Delete
+                </button>
+              </div>
+              <button type="button" className="primary-button wide" onClick={() => void saveEditedMeal()}>
+                Save changes
+              </button>
+            </section>
+          </div>
         )}
       </div>
 
