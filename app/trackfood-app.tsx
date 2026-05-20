@@ -1191,6 +1191,7 @@ export default function TrackFoodApp() {
   const [assistantText, setAssistantText] = useState("");
   const [isAssistantLoading, setIsAssistantLoading] = useState(false);
   const [assistantError, setAssistantError] = useState("");
+  const [currentDateKey, setCurrentDateKey] = useState(() => dateKey(new Date()));
   const [securitySummary, setSecuritySummary] = useState<SecuritySummary | null>(null);
   const [intruders, setIntruders] = useState<IntruderFlag[]>([]);
   const [scrollDepth, setScrollDepth] = useState(0);
@@ -1212,11 +1213,16 @@ export default function TrackFoodApp() {
     calorieGoal: "1850",
     activityLevel: "balanced",
   });
+  const assistantAbortRef = useRef<AbortController | null>(null);
 
   const parsedGoal = Number(profileForm.calorieGoal || authForm.calorieGoal) || 1850;
+  const todaysMeals = useMemo(
+    () => meals.filter((meal) => dateKeyFromIso(meal.logged_at) === currentDateKey),
+    [currentDateKey, meals],
+  );
   const dailyTotals = useMemo(
-    () => buildDailyTotals(meals, profile?.calorie_goal ?? parsedGoal),
-    [meals, parsedGoal, profile?.calorie_goal],
+    () => buildDailyTotals(todaysMeals, profile?.calorie_goal ?? parsedGoal),
+    [parsedGoal, profile?.calorie_goal, todaysMeals],
   );
   const goal = dailyTotals.goal;
   const totals = {
@@ -1298,6 +1304,27 @@ export default function TrackFoodApp() {
       };
     });
   }, [meals]);
+
+  useEffect(() => {
+    let timer: number | undefined;
+    const syncLocalDay = () => {
+      const now = new Date();
+      const nextKey = dateKey(now);
+      setCurrentDateKey(nextKey);
+      setSelectedDate((current) => (current === currentDateKey ? nextKey : current));
+
+      const nextMidnight = new Date(now);
+      nextMidnight.setHours(24, 0, 2, 0);
+      timer = window.setTimeout(syncLocalDay, Math.max(nextMidnight.getTime() - now.getTime(), 1000));
+    };
+
+    syncLocalDay();
+    return () => {
+      if (timer) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [currentDateKey]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -2259,12 +2286,15 @@ export default function TrackFoodApp() {
     setAssistantText("");
     setAssistantError("");
     setIsAssistantLoading(true);
+    const controller = new AbortController();
+    assistantAbortRef.current = controller;
     try {
       const reply = await apiRequest<AssistantMessage>(
         "/api/v1/assistant/messages",
         {
           method: "POST",
           body: JSON.stringify({ message, context_id: activeAssistantContextId }),
+          signal: controller.signal,
         },
         token,
       );
@@ -2272,32 +2302,39 @@ export default function TrackFoodApp() {
       setActiveAssistantContextId(reply.context_id);
       await refreshAssistantContexts(token, reply.context_id);
       await refreshCalendar(token);
+      await refreshMeals(token);
       setStatus("Assistant replied");
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        setAssistantText(message);
+        setStatus("Message stopped. Edit and send again.");
+        setAssistantMessages((current) =>
+          current.filter((item) => item.id !== localUserMessage.id),
+        );
+        return;
+      }
       setAssistantError(getErrorMessage(error));
       setAssistantMessages((current) =>
         current.filter((item) => item.id !== localUserMessage.id),
       );
     } finally {
       setIsAssistantLoading(false);
+      if (assistantAbortRef.current === controller) {
+        assistantAbortRef.current = null;
+      }
     }
   }
 
-  function buildQuickPrompt(kind: "estimate" | "plan" | "next") {
-    const latestMeals = meals
-      .slice(0, 4)
-      .map((meal) => `${meal.meal_slot}: ${foodTitle(meal.food)} (${formatKcal(meal.calories)})`)
-      .join("; ") || "none";
-    const remainingLabel = dailyTotals.overGoal
-      ? `over goal by ${formatKcal(dailyTotals.overGoal)}`
-      : `${formatKcal(dailyTotals.remaining)} remaining`;
-    if (kind === "estimate") {
-      return `Use my TrackFood diary context. I want to estimate and add a meal to my diary. Goal: ${formatKcal(dailyTotals.goal)}. Eaten today: ${formatKcal(dailyTotals.eaten)}. Balance: ${remainingLabel}. Recent meals: ${latestMeals}. Ask only for missing grams/serving details, then give one concrete log suggestion with meal slot, grams, kcal, and macros.`;
+  function stopAssistantGeneration() {
+    assistantAbortRef.current?.abort();
+  }
+
+  function editAssistantMessage(message: AssistantMessage) {
+    if (isAssistantLoading) {
+      stopAssistantGeneration();
     }
-    if (kind === "plan") {
-      return `Use my TrackFood diary and calendar context. Plan the rest of my day. Goal: ${formatKcal(dailyTotals.goal)}. Eaten today: ${formatKcal(dailyTotals.eaten)}. Balance: ${remainingLabel}. Meals logged: ${latestMeals}. Give a concrete plan with times and tell me exactly what calendar reminder or meal I should add.`;
-    }
-    return `Use my TrackFood diary context. What should I eat next? Goal: ${formatKcal(dailyTotals.goal)}. Eaten: ${formatKcal(dailyTotals.eaten)}. Balance: ${remainingLabel}. Protein so far: ${dailyTotals.macros.protein}g. Recent meals: ${latestMeals}. Suggest one specific option with estimated grams, kcal, macros, and whether I should add it to the diary.`;
+    setAssistantText(message.content);
+    setAssistantError("");
   }
 
   async function createAssistantContext() {
@@ -2536,7 +2573,7 @@ export default function TrackFoodApp() {
                 <HomeAction
                   label="Diary"
                   title="Log meals"
-                  detail={`${meals.length} meals today`}
+                  detail={`${dailyTotals.mealCount} meals today`}
                   onClick={() => navigate("diary")}
                 />
                 <HomeAction
@@ -2577,10 +2614,10 @@ export default function TrackFoodApp() {
                 <MacroLine label="Carbs" value={totals.carbs} goal={240} color="#4f86f7" />
                 <MacroLine label="Fat" value={totals.fat} goal={70} color="#ff795e" />
               </div>
-              {meals.length > 0 && (
+              {todaysMeals.length > 0 && (
                 <div className="latest-meals">
                   <span className="eyebrow">Latest meals</span>
-                  {meals.slice(0, 3).map((meal) => (
+                  {todaysMeals.slice(0, 3).map((meal) => (
                     <button key={meal.id} type="button" onClick={() => openMealEditor(meal)}>
                       <strong>{foodTitle(meal.food)}</strong>
                       <small>
@@ -2630,7 +2667,7 @@ export default function TrackFoodApp() {
                 <MealSection
                   key={slot.id}
                   slot={slot}
-                  meals={meals.filter((meal) => meal.meal_slot === slot.id)}
+                  meals={todaysMeals.filter((meal) => meal.meal_slot === slot.id)}
                   onAdd={openAdd}
                   onEdit={openMealEditor}
                   onDelete={deleteMeal}
@@ -3210,20 +3247,37 @@ export default function TrackFoodApp() {
             <div className="assistant-thread" aria-live="polite">
               {assistantMessages.length === 0 && !assistantError && (
                 <div className="assistant-empty">
-                  <strong>Ask about meals, plans, or your day.</strong>
-                  <span>Gemini runs through the backend, so the API key never touches the browser.</span>
+                  <strong>Start with a real request.</strong>
+                  <span>Ask it to log food, plan a reminder, or check today&apos;s balance. The assistant uses your account context through the backend.</span>
                 </div>
               )}
               {assistantMessages.map((message) => (
                 <article key={message.id} className={`chat-bubble ${message.role}`}>
-                  <span>{message.role === "assistant" ? "AI" : "You"}</span>
-                  <p>{message.content}</p>
+                  <div className="chat-avatar" aria-hidden="true">
+                    {message.role === "assistant" ? "TF" : "You"}
+                  </div>
+                  <div className="chat-message">
+                    <div className="chat-meta">
+                      <span>{message.role === "assistant" ? "TrackFood AI" : "You"}</span>
+                      {message.role === "user" && (
+                        <button type="button" className="chat-edit-button" onClick={() => editAssistantMessage(message)}>
+                          Edit
+                        </button>
+                      )}
+                    </div>
+                    <p>{message.content}</p>
+                  </div>
                 </article>
               ))}
               {isAssistantLoading && (
                 <article className="chat-bubble assistant is-loading">
-                  <span>AI</span>
-                  <p>Thinking through your food log...</p>
+                  <div className="chat-avatar" aria-hidden="true">TF</div>
+                  <div className="chat-message">
+                    <div className="chat-meta">
+                      <span>TrackFood AI</span>
+                    </div>
+                    <p>Thinking through your food log...</p>
+                  </div>
                 </article>
               )}
               {assistantError && (
@@ -3238,32 +3292,27 @@ export default function TrackFoodApp() {
               )}
             </div>
 
-            <div className="prompt-row">
-              {[
-                { label: "Estimate this meal", prompt: buildQuickPrompt("estimate") },
-                { label: "Plan my day", prompt: buildQuickPrompt("plan") },
-                { label: "What should I eat next?", prompt: buildQuickPrompt("next") },
-              ].map((item) => (
-                <button
-                  key={item.label}
-                  type="button"
-                  onClick={() => void handleAssistantSubmit(undefined, item.prompt)}
-                  disabled={isAssistantLoading}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-
             <form className="assistant-form" onSubmit={(event) => void handleAssistantSubmit(event)}>
               <textarea
                 value={assistantText}
                 onChange={(event) => setAssistantText(event.target.value)}
-                placeholder="Ask for a meal idea, shopping choice, or calendar plan..."
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void handleAssistantSubmit();
+                  }
+                }}
+                placeholder="Ask to add food, plan a reminder, or check your day..."
               />
-              <button type="submit" className="primary-button" disabled={isAssistantLoading}>
-                {isAssistantLoading ? "Thinking..." : "Send"}
-              </button>
+              {isAssistantLoading ? (
+                <button type="button" className="secondary-button stop-button" onClick={stopAssistantGeneration}>
+                  Stop
+                </button>
+              ) : (
+                <button type="submit" className="primary-button" disabled={!assistantText.trim()}>
+                  Send
+                </button>
+              )}
             </form>
           </section>
 
@@ -3322,7 +3371,7 @@ export default function TrackFoodApp() {
             <div className="assistant-memory-card">
               <span>Today</span>
               <strong>{formatKcal(totals.calories)}</strong>
-              <small>{meals.length} meals, {selectedDayEvents.length} plans</small>
+              <small>{dailyTotals.mealCount} meals, {selectedDayEvents.length} plans</small>
             </div>
             <p>
               Contexts are saved to your account, so each chat can keep its own memory for meal planning, grocery choices, or training days.
