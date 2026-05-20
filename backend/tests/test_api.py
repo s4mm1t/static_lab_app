@@ -13,7 +13,10 @@ from app.main import (
     MEMORY_USERS_BY_EMAIL,
     MEMORY_USERS_BY_ID,
     app,
+    build_assistant_app_context,
+    extract_assistant_lesson,
     hash_password_legacy,
+    list_ai_lessons_for_user,
     now_iso,
 )
 
@@ -183,6 +186,37 @@ def test_assistant_requires_configured_key() -> None:
         )
         assert chat.status_code == 503
         assert chat.json()["detail"] == "AI key is not configured"
+
+
+def test_assistant_learns_user_corrections_without_provider_key() -> None:
+    assert extract_assistant_lesson("запомни: отвечай короче и без лишней вежливости") == (
+        "отвечай короче и без лишней вежливости"
+    )
+
+    with TestClient(app) as client:
+        register = client.post(
+            "/api/v1/auth/register",
+            json={
+                "name": "Coach User",
+                "email": "coach@example.com",
+                "password": "LocalPass123",
+                "calorie_goal": 1900,
+                "activity_level": "balanced",
+            },
+        )
+        payload = register.json()
+        headers = {"Authorization": f"Bearer {payload['token']}"}
+        chat = client.post(
+            "/api/v1/assistant/messages",
+            json={"message": "запомни: отвечай короче и без лишней вежливости"},
+            headers=headers,
+        )
+        assert chat.status_code == 503
+        lessons = list_ai_lessons_for_user(payload["profile"]["id"])
+        assert lessons == ["отвечай короче и без лишней вежливости"]
+        app_context = build_assistant_app_context(MEMORY_USERS_BY_ID[payload["profile"]["id"]])
+        assert "Assistant lessons learned from this user" in app_context
+        assert "отвечай короче" in app_context
 
 
 def test_nutrition_estimate() -> None:

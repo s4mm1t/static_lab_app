@@ -642,6 +642,7 @@ MEMORY_INTRUDERS: dict[str, dict[str, Any]] = {}
 MEMORY_AI_CONTEXTS_BY_USER: dict[str, list[dict[str, Any]]] = defaultdict(list)
 MEMORY_AI_CONTEXTS_BY_ID: dict[str, dict[str, Any]] = {}
 MEMORY_AI_MESSAGES_BY_CONTEXT: dict[str, list[dict[str, Any]]] = defaultdict(list)
+MEMORY_AI_LESSONS_BY_USER: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
 
 def connect() -> psycopg.Connection[Any]:
@@ -695,6 +696,7 @@ def init_storage() -> None:
         MEMORY_AI_CONTEXTS_BY_USER.clear()
         MEMORY_AI_CONTEXTS_BY_ID.clear()
         MEMORY_AI_MESSAGES_BY_CONTEXT.clear()
+        MEMORY_AI_LESSONS_BY_USER.clear()
         return
 
     with connect() as conn:
@@ -849,6 +851,7 @@ def init_assistant_storage() -> None:
         MEMORY_AI_CONTEXTS_BY_USER.clear()
         MEMORY_AI_CONTEXTS_BY_ID.clear()
         MEMORY_AI_MESSAGES_BY_CONTEXT.clear()
+        MEMORY_AI_LESSONS_BY_USER.clear()
         return
 
     with connect_assistant() as conn:
@@ -889,6 +892,23 @@ def init_assistant_storage() -> None:
                 """
                 CREATE INDEX IF NOT EXISTS ai_messages_context_created_idx
                 ON ai_messages (context_id, created_at)
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_lessons (
+                    id UUID PRIMARY KEY,
+                    user_id UUID NOT NULL,
+                    lesson TEXT NOT NULL,
+                    source_message_id UUID,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS ai_lessons_user_created_idx
+                ON ai_lessons (user_id, created_at DESC)
                 """
             )
 
@@ -2383,6 +2403,101 @@ def create_assistant_message_for_user(
     return saved
 
 
+def extract_assistant_lesson(message: str) -> str | None:
+    cleaned = assert_chat_clean(message).strip()
+    lowered = cleaned.lower()
+    explicit_patterns = (
+        r"^(?:запомни|запомнить|учти|сохрани|remember|save this|note this|recuerda|guarda)\s*[:,-]?\s*(.+)$",
+        r"^(?:неправильно|нет|wrong|no|incorrecto|mal)\s*[:,-]?\s*(.+)$",
+        r"^(?:лучше отвечай|отвечай|answer|responde)\s*[:,-]?\s*(.+)$",
+    )
+    for pattern in explicit_patterns:
+        match = re.match(pattern, cleaned, flags=re.I)
+        if match:
+            lesson = normalize_text(match.group(1)).strip(" .,-:;")
+            return lesson[:280] if len(lesson) >= 4 else None
+
+    correction_markers = (
+        "это неправильно",
+        "ты ошибся",
+        "в следующий раз",
+        "не говори",
+        "говори",
+        "wrong",
+        "you are wrong",
+        "next time",
+        "don't say",
+        "do not say",
+        "incorrecto",
+        "te equivocas",
+        "la próxima vez",
+    )
+    if any(marker in lowered for marker in correction_markers):
+        return cleaned[:280]
+    return None
+
+
+def list_ai_lessons_for_user(user_id: str, limit: int = 10) -> list[str]:
+    if USE_MEMORY_ASSISTANT:
+        lessons = sorted(
+            MEMORY_AI_LESSONS_BY_USER[user_id],
+            key=lambda item: item["created_at"],
+            reverse=True,
+        )
+        return [lesson["lesson"] for lesson in lessons[:limit]]
+
+    with connect_assistant() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT lesson
+                FROM ai_lessons
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (user_id, limit),
+            )
+            return [row["lesson"] for row in cur.fetchall()]
+
+
+def save_ai_lesson_for_user(user_id: str, lesson: str, source_message_id: str | None = None) -> None:
+    normalized = normalize_text(lesson)
+    if len(normalized) < 4:
+        return
+
+    existing = {item.lower() for item in list_ai_lessons_for_user(user_id, 24)}
+    if normalized.lower() in existing:
+        return
+
+    row = {
+        "id": str(uuid4()),
+        "user_id": user_id,
+        "lesson": normalized[:280],
+        "source_message_id": source_message_id,
+        "created_at": datetime.now(timezone.utc),
+    }
+    if USE_MEMORY_ASSISTANT:
+        MEMORY_AI_LESSONS_BY_USER[user_id].append(row)
+        return
+
+    with connect_assistant() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ai_lessons (id, user_id, lesson, source_message_id, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (
+                    row["id"],
+                    user_id,
+                    row["lesson"],
+                    row["source_message_id"],
+                    row["created_at"],
+                ),
+            )
+
+
 def sanitize_assistant_reply(text: str) -> str:
     cleaned = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", cleaned)
@@ -2405,6 +2520,7 @@ def build_assistant_app_context(user: dict[str, Any]) -> str:
     meals = list_meals_for_user(user_id)
     today_meals = [meal for meal in meals if local_day_key(meal.logged_at) == today.isoformat()]
     upcoming_events = list_calendar_events_for_user(user_id, today, today + timedelta(days=14))
+    lessons = list_ai_lessons_for_user(user_id)
 
     calories_logged = sum(meal.calories for meal in today_meals)
     lines = [
@@ -2438,6 +2554,13 @@ def build_assistant_app_context(user: dict[str, Any]) -> str:
             )
     else:
         lines.append("Calendar plans: none for the next 14 days")
+
+    if lessons:
+        lines.append("Assistant lessons learned from this user. Follow these before generic style:")
+        for lesson in lessons:
+            lines.append(f"- {lesson}")
+    else:
+        lines.append("Assistant lessons learned from this user: none yet")
     return "\n".join(lines)
 
 
@@ -2510,18 +2633,23 @@ def assistant_calendar_intent(message: str) -> CalendarEventCreateRequest | None
 
 
 ASSISTANT_SYSTEM_PROMPT = (
-    "You are TrackFood AI, a concise nutrition and planning assistant inside a food tracker. "
+    "You are TrackFood AI, a sharp nutrition and planning assistant inside a food tracker. "
     "You are multilingual: answer in the same language the user uses, especially English, Russian, or Spanish. "
     "If the user mixes languages, follow the dominant language or the language they explicitly request. "
+    "Your voice is direct, simple, human, and a little distinctive. Do not sound like a generic polite chatbot. "
+    "No long apologies, no corporate filler, no 'as an AI language model', no motivational fluff. "
     "Help with meal ideas, product choices, diary reflection, calendar planning, and habit building. "
     "You can use the private app context supplied by the backend: profile, calorie goal, meals, and calendar plans. "
     "When the user asks what they ate, how much is left, or what to eat next, use the listed diary totals and meal names directly. "
-    "When the user describes food without grams or serving size, ask one short clarification or propose a realistic default and say it should be confirmed in the app. "
+    "For nutrition estimates, always name the assumption: grams, serving, or package. If grams are missing, ask one short clarification or propose a realistic default and say it should be confirmed in the app. "
     "When useful, suggest concrete app actions like add to diary, edit grams, create a reminder, or duplicate a recent meal. "
     "If a calendar action was completed by the backend, clearly say it was added and mention the date/time. "
+    "If the user corrects you or says remember/запомни/recuerda, treat that as a lesson for future replies. "
+    "Preferred structure: answer first, then 'What to do now:' with one or two concrete actions when useful. "
     "Do not diagnose, treat, or replace medical advice. Keep answers practical and safe. "
     "Write clean plain text only: no Markdown, no asterisks, no bold markers, no bullet glyphs. "
-    "Use short paragraphs, clear labels, and numbered steps only when they make the answer easier to scan."
+    "Use short paragraphs, clear labels, and numbered steps only when they make the answer easier to scan. "
+    "Keep most answers under 130 words unless the user asks for a detailed plan."
 )
 
 
@@ -2551,8 +2679,9 @@ def generate_assistant_reply(
         "systemInstruction": {"parts": system_parts},
         "contents": contents,
         "generationConfig": {
-            "temperature": 0.6,
-            "maxOutputTokens": 700,
+            "temperature": 0.45,
+            "topP": 0.86,
+            "maxOutputTokens": 520,
         },
     }
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
@@ -2980,6 +3109,10 @@ def create_assistant_message(
     context = get_assistant_context_for_user(user_id, payload.context_id)
     existing = list_assistant_messages_for_user(user_id, context_id=context.id)
     user_message = create_assistant_message_for_user(user_id, context.id, "user", payload.message)
+    learned_lesson = extract_assistant_lesson(payload.message)
+    if learned_lesson:
+        save_ai_lesson_for_user(user_id, learned_lesson, user_message.id)
+        log_security_event("assistant_lesson_saved", "info", request, user_id, "Assistant lesson saved")
     action_note = ""
     calendar_payload = assistant_calendar_intent(payload.message)
     if calendar_payload is not None:
