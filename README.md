@@ -19,6 +19,19 @@ Transform your meals into intelligent nutritional insights using computer vision
 - **🔒 Privacy-First** — Your health data stays private and secure
 - **🚀 Production-Ready** — Full-stack architecture with scalable backend
 
+## 📱 Screenshots
+
+### Mobile Views
+| Home Screen | Diary & Tracking | Add Food | Insights & Analytics |
+|-------------|------------------|----------|----------------------|
+| ![Home](docs/screenshots/home.png) | ![Diary](docs/screenshots/sauge-home2.png) | ![Add Food](docs/screenshots/sauge-home3.png) | ![Insights](docs/screenshots/desktop-home.png) |
+
+### App Tour
+![App Overview](docs/screenshots/sauge-app.png)
+
+### Design System
+![Design System](docs/screenshots/logo-check.png)
+
 ## 🏗️ Architecture
 
 ### Frontend
