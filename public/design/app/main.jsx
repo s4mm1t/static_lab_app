@@ -50,7 +50,7 @@ function App() {
 
   return (
     <ThemeCtx.Provider value={theme}>
-      <div style={{ ...rootStyle, position: 'fixed', inset: 0, width: '100vw', height: '100vh', background: theme.bg, color: theme.text, overflow: 'hidden',
+      <div style={{ ...rootStyle, position: 'fixed', inset: 0, width: '100%', height: '100%', background: theme.bg, color: theme.text, overflow: 'hidden',
         paddingTop: 'env(safe-area-inset-top, 0px)', paddingBottom: 'env(safe-area-inset-bottom, 0px)',
         paddingLeft: 'env(safe-area-inset-left, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)' }}>
         {!entered ? (

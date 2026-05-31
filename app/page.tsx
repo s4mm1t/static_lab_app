@@ -1,13 +1,19 @@
 "use client";
+import { useEffect } from "react";
 
 export default function Home() {
+  useEffect(() => {
+    // On mobile redirect directly — iframes on iOS Safari break safe-area and fixed positioning
+    if (window.innerWidth < 768) {
+      window.location.replace("/design/index.html");
+    }
+  }, []);
+
   return (
     <>
       <style>{`
         html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
-
-        /* Mobile: показываем мобильный дизайн */
-        .frame-mobile {
+        .frame-desktop {
           display: block;
           position: fixed;
           inset: 0;
@@ -15,30 +21,9 @@ export default function Home() {
           height: 100%;
           border: none;
         }
-        .frame-desktop {
-          display: none;
-          position: fixed;
-          inset: 0;
-          width: 100%;
-          height: 100%;
-          border: none;
-        }
-
-        /* Desktop: показываем десктопный дизайн */
-        @media (min-width: 768px) {
-          .frame-mobile  { display: none; }
-          .frame-desktop { display: block; }
-        }
       `}</style>
 
-      {/* Мобильный дизайн */}
-      <iframe
-        className="frame-mobile"
-        src="/design/index.html"
-        title="FoodTrack AI Mobile"
-      />
-
-      {/* Десктопный дизайн */}
+      {/* Desktop only — mobile is handled by the redirect above */}
       <iframe
         className="frame-desktop"
         src="/design/desktop.html"
