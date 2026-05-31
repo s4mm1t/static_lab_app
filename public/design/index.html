@@ -2,16 +2,24 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>FoodTrack AI — Mobile</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Archivo:wght@400..800&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <style>
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: #E2D9C7; -webkit-font-smoothing: antialiased; }
+  html, body { margin: 0; padding: 0; height: 100%; background: #ECE6D9; -webkit-font-smoothing: antialiased; }
   body { font-family: 'Manrope', sans-serif; }
-  #root { min-height: 100vh; }
+  #root { height: 100%; min-height: 100vh; min-height: 100dvh; }
+
+  /* iOS safe areas */
+  :root {
+    --sat: env(safe-area-inset-top, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+    --sal: env(safe-area-inset-left, 0px);
+    --sar: env(safe-area-inset-right, 0px);
+  }
   input, textarea, button { font-family: inherit; }
   input::placeholder, textarea::placeholder { color: #5A6373; }
   input:focus, textarea:focus { border-color: rgba(255,255,255,0.3) !important; }

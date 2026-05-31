@@ -2,10 +2,10 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "TrackFood AI",
+  title: "FoodTrack AI",
   description:
-    "Mobile-first nutrition tracking app with meal logging, profile goals, and a FastAPI app service.",
-  applicationName: "TrackFood AI",
+    "Camera-first nutrition tracking — log what you ate, see what changed.",
+  applicationName: "FoodTrack AI",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
@@ -22,10 +22,8 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f5f5f7" },
-    { media: "(prefers-color-scheme: dark)", color: "#050505" },
-  ],
+  viewportFit: "cover",
+  themeColor: "#ECE6D9",
 };
 
 export default function RootLayout({

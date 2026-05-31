@@ -50,57 +50,54 @@ function App() {
 
   return (
     <ThemeCtx.Provider value={theme}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: 'radial-gradient(120% 120% at 50% 0%, #EAE3D4 0%, #DAD0BC 62%)', padding: 20, boxSizing: 'border-box' }}>
-        <IOSDevice>
-          <div style={{ ...rootStyle, position: 'relative', height: '100%', background: theme.bg, color: theme.text, overflow: 'hidden' }}>
-            {!entered ? (
-              <Welcome onStart={() => setEntered(true)} theme={theme} />
-            ) : (
-              <>
-                <Screen routeKey={route.screen} motion={tw.motion} isCoach={route.screen === 'coach'}>
-                  {route.screen === 'coach'
-                    ? <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', height: 'calc(100% )' }}>{screens.coach}</div>
-                    : screens[route.screen]}
-                </Screen>
+      <div style={{ ...rootStyle, position: 'fixed', inset: 0, width: '100vw', height: '100vh', background: theme.bg, color: theme.text, overflow: 'hidden',
+        paddingTop: 'env(safe-area-inset-top, 0px)', paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+        paddingLeft: 'env(safe-area-inset-left, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)' }}>
+        {!entered ? (
+          <Welcome onStart={() => setEntered(true)} theme={theme} />
+        ) : (
+          <>
+            <Screen routeKey={route.screen} motion={tw.motion} isCoach={route.screen === 'coach'}>
+              {route.screen === 'coach'
+                ? <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', height: 'calc(100% )' }}>{screens.coach}</div>
+                : screens[route.screen]}
+            </Screen>
 
-                {/* bottom nav */}
-                <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 40, paddingBottom: 22,
-                  background: `linear-gradient(to top, ${theme.bg} 58%, transparent)`, pointerEvents: 'none' }}>
-                  <div style={{ margin: '0 16px', height: 62, borderRadius: 22, background: theme.panel2, border: `1px solid ${theme.line}`,
-                    boxShadow: '0 10px 30px rgba(80,70,40,0.14)', display: 'flex', alignItems: 'center', justifyContent: 'space-around',
-                    position: 'relative', pointerEvents: 'auto' }}>
-                    {nav.map(n => {
-                      if (n.fab) {
-                        const on = route.screen === 'add';
-                        return (
-                          <button key={n.id} onClick={() => openAdd(route.params.mealId || 'breakfast')} style={{
-                            width: 54, height: 54, borderRadius: 18, border: 'none', cursor: 'pointer', marginTop: -22,
-                            background: theme.accent, color: theme.accentOn, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            boxShadow: `0 8px 24px ${theme.accentGlow}, 0 0 0 5px ${theme.bg}`,
-                            transform: on ? 'scale(1.06) rotate(45deg)' : 'scale(1)', transition: 'transform .35s cubic-bezier(.22,1,.3,1)' }}>
-                            <Icon name="plus" size={26} stroke={2.6} />
-                          </button>
-                        );
-                      }
-                      const on = route.screen === n.id;
-                      return (
-                        <button key={n.id} onClick={() => go(n.id)} style={{
-                          background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column',
-                          alignItems: 'center', gap: 3, padding: '6px 8px', flex: 1, color: on ? theme.accent : theme.faint, transition: 'color .2s' }}>
-                          <Icon name={n.icon} size={22} stroke={on ? 2.5 : 2} />
-                          <span style={{ fontSize: 10, fontWeight: 700 }}>{n.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
+            {/* bottom nav */}
+            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 40, paddingBottom: 22,
+              background: `linear-gradient(to top, ${theme.bg} 58%, transparent)`, pointerEvents: 'none' }}>
+              <div style={{ margin: '0 16px', height: 62, borderRadius: 22, background: theme.panel2, border: `1px solid ${theme.line}`,
+                boxShadow: '0 10px 30px rgba(80,70,40,0.14)', display: 'flex', alignItems: 'center', justifyContent: 'space-around',
+                position: 'relative', pointerEvents: 'auto' }}>
+                {nav.map(n => {
+                  if (n.fab) {
+                    const on = route.screen === 'add';
+                    return (
+                      <button key={n.id} onClick={() => openAdd(route.params.mealId || 'breakfast')} style={{
+                        width: 54, height: 54, borderRadius: 18, border: 'none', cursor: 'pointer', marginTop: -22,
+                        background: theme.accent, color: theme.accentOn, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        boxShadow: `0 8px 24px ${theme.accentGlow}, 0 0 0 5px ${theme.bg}`,
+                        transform: on ? 'scale(1.06) rotate(45deg)' : 'scale(1)', transition: 'transform .35s cubic-bezier(.22,1,.3,1)' }}>
+                        <Icon name="plus" size={26} stroke={2.6} />
+                      </button>
+                    );
+                  }
+                  const on = route.screen === n.id;
+                  return (
+                    <button key={n.id} onClick={() => go(n.id)} style={{
+                      background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column',
+                      alignItems: 'center', gap: 3, padding: '6px 8px', flex: 1, color: on ? theme.accent : theme.faint, transition: 'color .2s' }}>
+                      <Icon name={n.icon} size={22} stroke={on ? 2.5 : 2} />
+                      <span style={{ fontSize: 10, fontWeight: 700 }}>{n.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
-                <Toast toast={toast} />
-              </>
-            )}
-          </div>
-        </IOSDevice>
-
+            <Toast toast={toast} />
+          </>
+        )}
         {entered && <AppTweaks tw={tw} setTweak={setTweak} />}
       </div>
     </ThemeCtx.Provider>

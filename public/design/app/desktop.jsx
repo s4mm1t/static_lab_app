@@ -577,27 +577,18 @@ function DesktopApp() {
 
   return (
     <ThemeCtx.Provider value={theme}>
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
-        background: 'radial-gradient(120% 120% at 50% 0%, #EAE3D4 0%, #DAD0BC 62%)' }}>
-        <div style={{ width: WIN_W * scale, height: WIN_H * scale }}>
-          <div style={{ width: WIN_W, height: WIN_H, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
-            <ChromeWindow width={WIN_W} height={WIN_H} url="foodtrack.ai/app" tabs={[{ title: 'FoodTrack AI — Dashboard' }, { title: 'Recipes' }]} activeIndex={0}>
-              <div style={{ '--display': dispFont, fontFamily: "'Manrope', sans-serif", display: 'flex', height: '100%',
-                background: theme.bg, color: theme.text, position: 'relative', overflow: 'hidden' }}>
-                <Sidebar route={route} go={setRoute} openTweaks={openTweaks} />
-                <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-                  <DeskTopBar route={route} onAdd={() => setAddOpen(true)} />
-                  <div key={route + (tw.motion ? '' : 'static')} style={{ flex: 1, overflowY: 'auto', padding: '24px 32px 36px',
-                    animation: tw.motion ? 'dropIn .42s cubic-bezier(.22,1,.3,1)' : 'none' }}>
-                    {views[route]}
-                  </div>
-                </div>
-                <AddModal open={addOpen} onClose={() => setAddOpen(false)} addFood={data.addFood} notify={notify} />
-                <Toast toast={toast} />
-              </div>
-            </ChromeWindow>
+      <div style={{ '--display': dispFont, fontFamily: "'Manrope', sans-serif", display: 'flex',
+        width: '100vw', height: '100vh', background: theme.bg, color: theme.text, position: 'fixed', inset: 0, overflow: 'hidden' }}>
+        <Sidebar route={route} go={setRoute} openTweaks={openTweaks} />
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <DeskTopBar route={route} onAdd={() => setAddOpen(true)} />
+          <div key={route + (tw.motion ? '' : 'static')} style={{ flex: 1, overflowY: 'auto', padding: '24px 32px 36px',
+            animation: tw.motion ? 'dropIn .42s cubic-bezier(.22,1,.3,1)' : 'none' }}>
+            {views[route]}
           </div>
         </div>
+        <AddModal open={addOpen} onClose={() => setAddOpen(false)} addFood={data.addFood} notify={notify} />
+        <Toast toast={toast} />
         <AppTweaks tw={tw} setTweak={setTweak} />
       </div>
     </ThemeCtx.Provider>
