@@ -14,7 +14,7 @@ function TopBar({ left, title, go, showProfile = true, extra }) {
         <button onClick={() => go('insights')} style={iconBtn(t)}><Icon name="chart" size={19} color={t.muted} stroke={2.2} /></button>
         {showProfile && (
           <button onClick={() => go('profile')} style={{ ...iconBtn(t), padding: 0, overflow: 'hidden', background: 'linear-gradient(135deg,#dfeee3,#b9d6c4)' }}>
-            <span style={{ fontWeight: 800, color: '#0A0E16', fontSize: 14 }}>P</span>
+            <span style={{ fontWeight: 800, color: '#0A0E16', fontSize: 14 }}>A</span>
           </button>
         )}
       </div>

@@ -129,7 +129,7 @@ function InsightsScreen({ go, data }) {
   );
 }
 
-function ProfileScreen({ go, data, openTweaks }) {
+function ProfileScreen({ go, data, openTweaks, onLogout, notify }) {
   const t = useTheme();
   const { totals } = data;
   const left = Math.max(0, GOALS.kcal - totals.kcal);
@@ -139,6 +139,37 @@ function ProfileScreen({ go, data, openTweaks }) {
     ['Plans', String(data.plans.length), dateKey(0)],
     ['Routine', 'Balanced', 'activity'],
   ];
+
+  const profile = { name: 'Alex Rivera', email: 'alex.rivera@gmail.com', phone: '+34 676 76 76 67', units: 'Metric · grams / kg' };
+
+  const exportJSON = () => {
+    const payload = {
+      app: 'FoodTrack AI',
+      exportedAt: new Date().toISOString(),
+      profile,
+      goals: { ...GOALS },
+      totals: data.totals,
+      diary: data.log,
+      plans: data.plans,
+    };
+    try {
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `foodtrack-export-${dateKey(0)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      notify && notify('Exported your data as JSON');
+    } catch (e) {
+      notify && notify('Export failed — try again');
+    }
+  };
+
+  const changeAvatar = () => notify && notify('Avatar upload is coming soon');
+  const logOut = () => onLogout && onLogout();
   return (
     <div>
       <TopBar go={go} title="Profile" showProfile={false} />
@@ -146,16 +177,16 @@ function ProfileScreen({ go, data, openTweaks }) {
       <Card pad={20} style={{ marginBottom: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <div style={{ width: 64, height: 64, borderRadius: 20, background: 'linear-gradient(135deg,#dfeee3,#a9cdb9)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 26, color: '#0A0E16' }}>P</div>
+            display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 26, color: '#0A0E16' }}>{profile.name.charAt(0)}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <Eyebrow>Member profile</Eyebrow>
-            <div style={{ color: t.text, fontWeight: 800, fontSize: 20, overflow: 'hidden', textOverflow: 'ellipsis' }}>pidor</div>
-            <div style={{ color: t.faint, fontSize: 13 }}>pi***@gmail.com</div>
+            <div style={{ color: t.text, fontWeight: 800, fontSize: 20, overflow: 'hidden', textOverflow: 'ellipsis' }}>{profile.name}</div>
+            <div style={{ color: t.faint, fontSize: 13 }}>{profile.email}</div>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 9, marginTop: 16 }}>
-          <Btn variant="ghost" size="sm" style={{ flex: 1 }}>Change avatar</Btn>
-          <Btn variant="danger" size="sm" style={{ flex: 1 }}>Log out</Btn>
+          <Btn variant="ghost" size="sm" style={{ flex: 1 }} onClick={changeAvatar}>Change avatar</Btn>
+          <Btn variant="danger" size="sm" style={{ flex: 1 }} onClick={logOut}>Log out</Btn>
         </div>
       </Card>
 
@@ -187,7 +218,7 @@ function ProfileScreen({ go, data, openTweaks }) {
       <Card pad={16} style={{ marginBottom: 14 }}>
         <Eyebrow>Account</Eyebrow>
         <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 0 }}>
-          {[['Phone linked', '+34 676 76 76 67'], ['Email', 'pi***@gmail.com'], ['Units', 'Metric · grams / kg'], ['Display name', 'pidor']].map(([l, v], i, arr) => (
+          {[['Phone linked', profile.phone], ['Email', profile.email], ['Units', profile.units], ['Display name', profile.name]].map(([l, v], i, arr) => (
             <div key={l} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 0', borderBottom: i < arr.length - 1 ? `1px solid ${t.line}` : 'none' }}>
               <span style={{ color: t.muted, fontSize: 14 }}>{l}</span>
               <span style={{ color: t.text, fontWeight: 600, fontSize: 14 }}>{v}</span>
@@ -201,8 +232,8 @@ function ProfileScreen({ go, data, openTweaks }) {
         <div style={{ color: t.text, fontWeight: 700, fontSize: 15, margin: '6px 0 3px' }}>Account data</div>
         <div style={{ color: t.faint, fontSize: 12, marginBottom: 13 }}>Export your profile, diary, plans, and coach contexts.</div>
         <div style={{ display: 'flex', gap: 9 }}>
-          <Btn variant="ghost" size="sm" style={{ flex: 1 }}>Export JSON</Btn>
-          <Btn variant="danger" size="sm" style={{ flex: 1 }}>Sign out device</Btn>
+          <Btn variant="ghost" size="sm" style={{ flex: 1 }} onClick={exportJSON}>Export JSON</Btn>
+          <Btn variant="danger" size="sm" style={{ flex: 1 }} onClick={logOut}>Sign out device</Btn>
         </div>
       </Card>
     </div>

@@ -37,7 +37,7 @@ function App() {
     plan:     <PlanScreen go={go} data={data} />,
     coach:    <CoachScreen go={go} data={data} addFood={data.addFood} addPlan={data.addPlan} notify={notify} />,
     insights: <InsightsScreen go={go} data={data} />,
-    profile:  <ProfileScreen go={go} data={data} openTweaks={openTweaks} />,
+    profile:  <ProfileScreen go={go} data={data} openTweaks={openTweaks} onLogout={() => setEntered(false)} notify={notify} />,
   };
 
   const nav = [
@@ -50,9 +50,7 @@ function App() {
 
   return (
     <ThemeCtx.Provider value={theme}>
-      <div style={{ ...rootStyle, position: 'fixed', inset: 0, width: '100%', height: '100%', background: theme.bg, color: theme.text, overflow: 'hidden',
-        paddingTop: 'env(safe-area-inset-top, 0px)', paddingBottom: 'env(safe-area-inset-bottom, 0px)',
-        paddingLeft: 'env(safe-area-inset-left, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)' }}>
+      <div style={{ ...rootStyle, position: 'fixed', inset: 0, width: '100%', height: '100%', background: theme.bg, color: theme.text, overflow: 'hidden' }}>
         {!entered ? (
           <Welcome onStart={() => setEntered(true)} theme={theme} />
         ) : (
@@ -64,7 +62,7 @@ function App() {
             </Screen>
 
             {/* bottom nav */}
-            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 40, paddingBottom: 22,
+            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 40, paddingBottom: 'calc(22px + env(safe-area-inset-bottom, 0px))',
               background: `linear-gradient(to top, ${theme.bg} 58%, transparent)`, pointerEvents: 'none' }}>
               <div style={{ margin: '0 16px', height: 62, borderRadius: 22, background: theme.panel2, border: `1px solid ${theme.line}`,
                 boxShadow: '0 10px 30px rgba(80,70,40,0.14)', display: 'flex', alignItems: 'center', justifyContent: 'space-around',
@@ -116,7 +114,7 @@ function Screen({ children, routeKey, motion, isCoach }) {
   return (
     <div key={routeKey} style={{
       position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden',
-      padding: '58px 18px 110px',
+      padding: 'calc(58px + env(safe-area-inset-top, 0px)) calc(18px + env(safe-area-inset-right, 0px)) calc(110px + env(safe-area-inset-bottom, 0px)) calc(18px + env(safe-area-inset-left, 0px))',
       display: isCoach ? 'flex' : 'block', flexDirection: 'column',
       opacity: 1,
       transform: shown ? 'none' : 'translateX(16px)',
@@ -136,7 +134,8 @@ function Welcome({ onStart, theme }) {
     { icon: 'coach', label: 'Get coached', sub: 'AI for real days' },
   ];
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '56px 24px 30px', boxSizing: 'border-box',
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box',
+      padding: 'calc(56px + env(safe-area-inset-top, 0px)) calc(24px + env(safe-area-inset-right, 0px)) calc(30px + env(safe-area-inset-bottom, 0px)) calc(24px + env(safe-area-inset-left, 0px))',
       overflowY: 'auto',
       background: `radial-gradient(130% 65% at 100% 0%, ${theme.accentGlow} 0%, transparent 52%), ${theme.bg}` }}>
       {/* header */}
