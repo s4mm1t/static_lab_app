@@ -1,13 +1,36 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 export default function Home() {
+  const [checked, setChecked] = useState(false);
+
   useEffect(() => {
-    // On mobile redirect directly — iframes on iOS Safari break safe-area and fixed positioning
-    if (window.innerWidth < 768) {
+    const ua = navigator.userAgent || "";
+    const isMobile =
+      /iPhone|iPad|iPod|Android|Mobile/i.test(ua) ||
+      window.matchMedia("(max-width: 767px)").matches ||
+      window.innerWidth < 768;
+
+    if (isMobile) {
+      // iframes break safe-area + fixed positioning on iOS — go straight to the design
       window.location.replace("/design/index.html");
+      return;
     }
+    setChecked(true);
   }, []);
+
+  // Avoid flashing the desktop iframe before the mobile check resolves
+  if (!checked) {
+    return (
+      <div
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "#ECE6D9",
+        }}
+      />
+    );
+  }
 
   return (
     <>
