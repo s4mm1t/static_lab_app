@@ -62,7 +62,7 @@ function App() {
             </Screen>
 
             {/* bottom nav */}
-            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 40, paddingBottom: 'calc(6px + env(safe-area-inset-bottom, 0px))',
+            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 40, paddingBottom: 'env(safe-area-inset-bottom, 0px)',
               background: `linear-gradient(to top, ${theme.bg} 58%, transparent)`, pointerEvents: 'none' }}>
               <div style={{ margin: '0 16px', height: 62, borderRadius: 22, background: theme.panel2, border: `1px solid ${theme.line}`,
                 boxShadow: '0 10px 30px rgba(80,70,40,0.14)', display: 'flex', alignItems: 'center', justifyContent: 'space-around',
@@ -114,7 +114,7 @@ function Screen({ children, routeKey, motion, isCoach }) {
   return (
     <div key={routeKey} style={{
       position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden',
-      padding: 'calc(14px + env(safe-area-inset-top, 0px)) calc(18px + env(safe-area-inset-right, 0px)) calc(110px + env(safe-area-inset-bottom, 0px)) calc(18px + env(safe-area-inset-left, 0px))',
+      padding: 'env(safe-area-inset-top, 0px) calc(18px + env(safe-area-inset-right, 0px)) calc(110px + env(safe-area-inset-bottom, 0px)) calc(18px + env(safe-area-inset-left, 0px))',
       display: isCoach ? 'flex' : 'block', flexDirection: 'column',
       opacity: 1,
       transform: shown ? 'none' : 'translateX(16px)',
