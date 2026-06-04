@@ -9,19 +9,26 @@ const PLAN_TYPES = [
 
 function PlanScreen({ go, data }) {
   const t = useTheme();
-  const [sel, setSel] = React.useState(29);
+  const today = React.useMemo(() => new Date(), []);
+  const [cursor, setCursor] = React.useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
+  const [sel, setSel] = React.useState(today.getDate());
   const [type, setType] = React.useState('Training');
   const [title, setTitle] = React.useState('');
   const [time, setTime] = React.useState('18:30');
-  const month = 'May 2026';
-  // May 2026: starts Friday (1st = Fri). grid offset: Su=0 → 1st is Fri index 5
-  const firstDow = 5; const days = 31;
+  const month = cursor.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const firstDow = new Date(cursor.getFullYear(), cursor.getMonth(), 1).getDay();
+  const days = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
   const cells = [];
   for (let i = 0; i < firstDow; i++) cells.push(null);
   for (let d = 1; d <= days; d++) cells.push(d);
 
-  const selKey = `2026-05-${String(sel).padStart(2, '0')}`;
+  const monthKey = `${cursor.getFullYear()}-${String(cursor.getMonth()+1).padStart(2, '0')}`;
+  const selKey = `${monthKey}-${String(Math.min(sel, days)).padStart(2, '0')}`;
   const dayPlans = data.plans.filter(p => p.date === selKey);
+  const moveMonth = (delta) => {
+    setCursor(current => new Date(current.getFullYear(), current.getMonth() + delta, 1));
+    setSel(1);
+  };
 
   const save = () => {
     if (!title.trim()) return;
@@ -39,8 +46,8 @@ function PlanScreen({ go, data }) {
             <div style={{ color: t.text, fontWeight: 800, fontSize: 22, fontFamily: 'var(--display)' }}>{month}</div>
           </div>
           <div style={{ display: 'flex', gap: 7 }}>
-            <button style={navBtn(t)}><Icon name="chevron" size={16} style={{ transform: 'rotate(180deg)' }} color={t.muted} /></button>
-            <button style={navBtn(t)}><Icon name="chevron" size={16} color={t.muted} /></button>
+            <button onClick={() => moveMonth(-1)} style={navBtn(t)}><Icon name="chevron" size={16} style={{ transform: 'rotate(180deg)' }} color={t.muted} /></button>
+            <button onClick={() => moveMonth(1)} style={navBtn(t)}><Icon name="chevron" size={16} color={t.muted} /></button>
           </div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 5, marginBottom: 6 }}>
@@ -52,7 +59,7 @@ function PlanScreen({ go, data }) {
           {cells.map((d, i) => {
             if (!d) return <div key={i} />;
             const on = d === sel;
-            const has = data.plans.some(p => p.date === `2026-05-${String(d).padStart(2,'0')}`);
+            const has = data.plans.some(p => p.date === `${monthKey}-${String(d).padStart(2,'0')}`);
             return (
               <button key={i} onClick={() => setSel(d)} style={{
                 aspectRatio: '1', borderRadius: 11, cursor: 'pointer',
@@ -123,55 +130,153 @@ function PlanScreen({ go, data }) {
 }
 function navBtn(t) { return { width: 34, height: 34, borderRadius: 10, background: t.elev, border: `1px solid ${t.line}`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }; }
 
+function isCannedCoachReplyText(reply) {
+  const low = String(reply || '').toLowerCase();
+  return /выберите один из вариантов|добавьте в дневник питания|please choose one of the options|i can help you with|elige una de las opciones/i.test(low);
+}
+
 // ── Coach (Assistant) ─────────────────────────────────────────────────
-function CoachScreen({ go, data, addFood, addPlan, notify }) {
+function CoachScreen({ go, data, profile, addFood, addPlan, notify }) {
   const t = useTheme();
-  const [msgs, setMsgs] = React.useState([
-    { from: 'ai', text: "Hey — I'm your FoodTrack coach. I can log meals, plan reminders, or read today's balance. What's up?" },
-  ]);
+  const account = profile?.email || 'guest';
+  const coachKey = accountStorageKey(account, 'coach-v2');
+  const intro = { from: 'ai', text: "Готов. Пиши обычным языком: я буду отвечать через основной агент и учитывать профиль, дневник, планы и текущий экран." };
+  const loadCoachMessages = () => {
+    const stored = storedJSON(coachKey, [intro]);
+    const cleaned = stored.filter(m => !(m.from === 'ai' && isCannedCoachReplyText(m.text)));
+    return cleaned.length ? cleaned : [intro];
+  };
+  const [msgs, setMsgs] = React.useState(loadCoachMessages);
   const [input, setInput] = React.useState('');
   const [typing, setTyping] = React.useState(false);
   const scrollRef = React.useRef(null);
 
   React.useEffect(() => {
+    localStorage.removeItem(accountStorageKey(account, 'coach'));
+    setMsgs(loadCoachMessages());
+  }, [account, coachKey]);
+
+  React.useEffect(() => {
+    localStorage.setItem(coachKey, JSON.stringify(msgs.slice(-40)));
+  }, [coachKey, msgs]);
+
+  React.useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [msgs, typing]);
 
-  const respond = (text) => {
+  const lang = (text) => /[а-яё]/i.test(text) ? 'ru' : /[áéíóúñ¿¡]|\b(hola|comi|comí|calorias|gramos)\b/i.test(text) ? 'es' : 'en';
+  const apiBase = () => `${window.location.protocol}//${window.location.hostname || '127.0.0.1'}:8000`;
+  const clientContext = () => {
+    const meals = data.log.slice(-12).map(item => {
+      const food = item.food;
+      return `${item.mealId}: ${food.name}, ${food.quantityG || food.servingG || 100}g, ${food.kcal} kcal, P${food.protein} C${food.carbs} F${food.fat}`;
+    });
+    const plans = data.plans.slice(-12).map(plan => `${plan.date} ${plan.time || ''}: ${plan.title} (${plan.type})`);
+    return [
+      `Profile: ${profile?.name || 'user'}, ${profile?.weightKg || 'not set'}kg, ${profile?.heightCm || 'not set'}cm, diet ${profile?.diet || 'balanced'}, goal ${fmt(GOALS.kcal)} kcal`,
+      `Today totals in mobile UI: ${fmt(data.totals.kcal)} kcal, protein ${Math.round(data.totals.protein)}g, carbs ${Math.round(data.totals.carbs)}g, fat ${Math.round(data.totals.fat)}g, fiber ${Math.round(data.totals.fiber)}g`,
+      `Today remaining in mobile UI: ${fmt(Math.max(0, GOALS.kcal - data.totals.kcal))} kcal`,
+      `Mobile UI diary: ${meals.length ? meals.join('; ') : 'empty'}`,
+      `Mobile UI plans: ${plans.length ? plans.join('; ') : 'empty'}`,
+      `Important: avoid canned fallback text. React to the latest user message specifically and answer in the same language.`,
+    ].join('\n');
+  };
+  const askBackend = async (text) => {
+    const token = localStorage.getItem('tf-auth-token') || localStorage.getItem('trackfoodai-token');
+    if (!token) return { content: null, error: 'no-token' };
+    try {
+      const res = await fetch(`${apiBase()}/api/v1/assistant/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ message: text, client_context: clientContext() }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) return { content: null, error: payload.detail || `backend-${res.status}` };
+      return { content: payload.content || null, error: null };
+    } catch {
+      return { content: null, error: 'backend-offline' };
+    }
+  };
+  const runLocalAction = (text) => {
     const low = text.toLowerCase();
-    const left = Math.max(0, GOALS.kcal - data.totals.kcal);
-    // log food
+    const language = lang(text);
+    const grams = Number((low.match(/(\d{1,4})\s*(?:г|гр|g|gram|grams|gramos)/i) || [])[1]) || undefined;
     const food = FOOD_DB.find(f => low.includes(f.name.toLowerCase().split(' ')[0]));
-    if (low.match(/log|add|ate|had/) && food) {
-      addFood(food, 'snack'); notify(`Logged ${food.name}`);
-      return `Done — logged **${food.name}** (${food.kcal} kcal) to your snacks. You've got **${fmt(left - food.kcal)} kcal** left today.`;
+    if (low.match(/log|add|ate|had|добав|залог|съел|ел|comí|agrega|añade/) && food) {
+      addFood(food, 'snack', grams);
+      notify(`Logged ${food.name}`);
+      return language === 'ru'
+        ? `Локально добавил ${food.name}${grams ? `, ${grams}g` : ''} в Diary.`
+        : language === 'es'
+          ? `Añadí localmente ${food.name}${grams ? `, ${grams}g` : ''} al diario.`
+          : `Added ${food.name}${grams ? `, ${grams}g` : ''} locally to Diary.`;
     }
-    if (low.match(/left|balance|calorie|how many|remaining/)) {
-      return `You're at **${fmt(data.totals.kcal)} / ${fmt(GOALS.kcal)} kcal** today (${Math.round(data.totals.kcal/GOALS.kcal*100)}%). That's **${fmt(left)} kcal** left. Protein's at ${Math.round(data.totals.protein)}g — push it toward ${GOALS.protein}g.`;
-    }
-    if (low.match(/plan|remind|tomorrow|train|workout|leg/)) {
-      addPlan({ date: dateKey(1), type: 'Training', title: 'Leg day', time: '18:30' });
+    if (low.match(/plan|remind|tomorrow|train|workout|leg|run|running|план|напом|завтра|трен|зал|пробеж|бег|entreno|mañana|correr/)) {
+      const isRun = low.match(/run|running|пробеж|бег|correr/);
+      const title = isRun ? (language === 'ru' ? 'Пробежка' : language === 'es' ? 'Correr' : 'Run') : (language === 'ru' ? 'Тренировка' : language === 'es' ? 'Entreno' : 'Training');
+      addPlan({ date: dateKey(1), type: 'Training', title, time: '18:30' });
       notify('Plan added to calendar');
-      return `Set — **Leg day** added to tomorrow at 18:30. Want me to pre-log a post-workout shake too?`;
+      return language === 'ru'
+        ? `Локально добавил в календарь: ${title}, завтра в 18:30.`
+        : language === 'es'
+          ? `Añadí localmente al calendario: ${title}, mañana a las 18:30.`
+          : `Added locally to calendar: ${title}, tomorrow at 18:30.`;
     }
-    if (low.match(/protein|snack|suggest|recommend/)) {
-      return `For a high-protein snack: a **whey shake (27g protein, 130 kcal)** or **Greek yogurt bowl (24g)**. Want me to log one?`;
+    return null;
+  };
+  const localBalanceReply = (text) => {
+    const low = text.toLowerCase();
+    if (!low.match(/left|balance|calorie|how many|remaining|остал|калор|баланс|сколько|calorías|quedan/)) return null;
+    const language = lang(text);
+    const left = Math.max(0, GOALS.kcal - data.totals.kcal);
+    if (language === 'ru') {
+      return `Осталось ${fmt(left)} kcal из цели ${fmt(GOALS.kcal)} kcal. Уже записано ${fmt(data.totals.kcal)} kcal.\n\nМакросы сейчас: белок ${Math.round(data.totals.protein)}g, углеводы ${Math.round(data.totals.carbs)}g, жиры ${Math.round(data.totals.fat)}g. Это данные текущего Diary, не заготовка.`;
     }
-    return `Got it. I can log meals, check your balance, or plan your week — try "log a banana" or "how many calories left?"`;
+    if (language === 'es') {
+      return `Quedan ${fmt(left)} kcal de una meta de ${fmt(GOALS.kcal)} kcal. Ya hay ${fmt(data.totals.kcal)} kcal registradas.\n\nMacros ahora: proteína ${Math.round(data.totals.protein)}g, carbs ${Math.round(data.totals.carbs)}g, grasa ${Math.round(data.totals.fat)}g. Esto sale del Diary actual, no de una plantilla.`;
+    }
+    return `You have ${fmt(left)} kcal left from a ${fmt(GOALS.kcal)} kcal goal. Logged so far: ${fmt(data.totals.kcal)} kcal.\n\nCurrent macros: protein ${Math.round(data.totals.protein)}g, carbs ${Math.round(data.totals.carbs)}g, fat ${Math.round(data.totals.fat)}g. This comes from the current Diary, not a canned template.`;
+  };
+  const isCannedReply = (reply) => {
+    return isCannedCoachReplyText(reply);
+  };
+  const offlineReply = (text, reason, actionReply) => {
+    const language = lang(text);
+    const left = Math.max(0, GOALS.kcal - data.totals.kcal);
+    const reasonText = reason === 'no-token'
+        ? (language === 'ru' ? 'нет активной backend-сессии' : language === 'es' ? 'no hay sesión activa del backend' : 'no active backend session')
+      : reason === 'AI key is not configured'
+        ? (language === 'ru' ? 'backend не видит ключ модели' : language === 'es' ? 'el backend no ve la clave del modelo' : 'backend cannot see the model key')
+        : reason === 'canned-backend-reply'
+          ? (language === 'ru' ? 'backend вернул шаблонную болванку' : language === 'es' ? 'el backend devolvió una plantilla' : 'backend returned a canned template')
+        : reason === 'backend-offline'
+          ? (language === 'ru' ? 'backend сейчас недоступен' : language === 'es' ? 'el backend no está disponible' : 'backend is offline')
+          : reason;
+    if (language === 'ru') {
+      return `${actionReply ? `${actionReply}\n\n` : ''}Сейчас я не получил ответ основной модели: ${reasonText}. Не буду притворяться и слать заготовку. По локальному дневнику вижу ${fmt(data.totals.kcal)} kcal из ${fmt(GOALS.kcal)}, осталось ${fmt(left)} kcal.`;
+    }
+    if (language === 'es') {
+      return `${actionReply ? `${actionReply}\n\n` : ''}Ahora no recibí respuesta del modelo principal: ${reasonText}. No voy a fingir con una plantilla. En el diario local veo ${fmt(data.totals.kcal)} kcal de ${fmt(GOALS.kcal)}, quedan ${fmt(left)} kcal.`;
+    }
+    return `${actionReply ? `${actionReply}\n\n` : ''}I did not get a reply from the main model: ${reasonText}. I will not hide that behind a canned template. Local diary: ${fmt(data.totals.kcal)} of ${fmt(GOALS.kcal)} kcal, ${fmt(left)} kcal left.`;
   };
 
-  const send = (preset) => {
+  const send = async (preset) => {
     const text = (preset || input).trim();
     if (!text) return;
     setMsgs(m => [...m, { from: 'me', text }]);
     setInput(''); setTyping(true);
+    const actionReply = runLocalAction(text);
+    const backend = await askBackend(text);
     setTimeout(() => {
       setTyping(false);
-      setMsgs(m => [...m, { from: 'ai', text: respond(text) }]);
-    }, 1100);
+      const backendContent = backend.content && !isCannedReply(backend.content) ? backend.content : null;
+      const textReply = backendContent || localBalanceReply(text) || (backend.content && actionReply) || offlineReply(text, backend.content ? 'canned-backend-reply' : (backend.error || 'empty-backend-reply'), actionReply);
+      setMsgs(m => [...m, { from: 'ai', text: textReply }]);
+    }, backend.content ? 180 : 500);
   };
 
-  const chips = ['Calories left today?', 'Log a banana', 'Plan leg day tomorrow', 'High-protein snack'];
+  const chips = ['Пробежка завтра', 'Сколько калорий осталось?', 'Добавь банан 120г', 'Белковый перекус'];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -198,7 +303,7 @@ function CoachScreen({ go, data, addFood, addPlan, notify }) {
         </div>
         <div style={{ display: 'flex', gap: 9, alignItems: 'flex-end' }}>
           <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()}
-            placeholder="Ask to log food, plan, or check your day…" style={{ ...inputStyle(t), borderRadius: 999 }} />
+            placeholder="Спроси про еду, граммы, план или дневной баланс…" style={{ ...inputStyle(t), borderRadius: 999 }} />
           <button onClick={() => send()} style={{ width: 48, height: 48, borderRadius: 999, flexShrink: 0, border: 'none', cursor: 'pointer',
             background: t.accent, color: t.accentOn, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: `0 6px 18px ${t.accentGlow}` }}>
             <Icon name="send" size={20} stroke={2.4} />
@@ -211,8 +316,6 @@ function CoachScreen({ go, data, addFood, addPlan, notify }) {
 
 function Bubble({ m, t }) {
   const me = m.from === 'me';
-  // simple **bold** rendering
-  const parts = m.text.split(/(\*\*[^*]+\*\*)/g);
   return (
     <div style={{ alignSelf: me ? 'flex-end' : 'flex-start', maxWidth: '82%',
       background: me ? t.accent : t.panel, color: me ? t.accentOn : t.text,
@@ -220,9 +323,7 @@ function Bubble({ m, t }) {
       borderTopRightRadius: me ? 6 : 18, borderTopLeftRadius: me ? 18 : 6,
       padding: '12px 15px', fontSize: 14.5, lineHeight: 1.5, fontWeight: me ? 600 : 500,
       animation: 'dropIn .35s cubic-bezier(.22,1,.3,1)' }}>
-      {parts.map((p, i) => p.startsWith('**')
-        ? <strong key={i} style={{ fontWeight: 800, color: me ? t.accentOn : t.accent }}>{p.slice(2, -2)}</strong>
-        : <span key={i}>{p}</span>)}
+      {m.text}
     </div>
   );
 }

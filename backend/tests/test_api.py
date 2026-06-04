@@ -17,6 +17,7 @@ from app.main import (
     assistant_calendar_intent,
     assistant_food_log_action,
     assistant_relevant_products_context,
+    assistant_system_parts,
     app,
     build_assistant_app_context,
     extract_assistant_lesson,
@@ -61,10 +62,16 @@ def test_auth_meal_log_and_delete() -> None:
                 "password": "LocalPass123",
                 "calorie_goal": 1900,
                 "activity_level": "balanced",
+                "weight_kg": 74,
+                "height_cm": 181,
+                "diet_type": "muscle",
             },
         )
         assert register.status_code == 201
         assert register.json()["profile"]["role"] == "user"
+        assert register.json()["profile"]["weight_kg"] == 74
+        assert register.json()["profile"]["height_cm"] == 181
+        assert register.json()["profile"]["diet_type"] == "muscle"
         token = register.json()["token"]
         headers = {"Authorization": f"Bearer {token}"}
 
@@ -97,6 +104,10 @@ def test_auth_meal_log_and_delete() -> None:
         assert profile.status_code == 200
         assert profile.json()["phone_number"] == "+34 600 100 200"
         assert profile.json()["calorie_goal"] == 2100
+        context = build_assistant_app_context(MEMORY_USERS_BY_ID[register.json()["profile"]["id"]])
+        assert "Weight: 74" in context
+        assert "Height: 181" in context
+        assert "Diet type: muscle" in context
 
         deleted = client.delete(f"/api/v1/meals/{meal_id}", headers=headers)
         assert deleted.status_code == 200
@@ -192,6 +203,19 @@ def test_assistant_requires_configured_key() -> None:
         )
         assert chat.status_code == 503
         assert chat.json()["detail"] == "AI key is not configured"
+
+
+def test_assistant_system_parts_include_agents_md(monkeypatch, tmp_path) -> None:
+    agent_file = tmp_path / "AGENTS.md"
+    agent_file.write_text("SPECIAL AGENT RULE", encoding="utf-8")
+    monkeypatch.setattr("app.main.AGENT_INSTRUCTIONS_PATH", agent_file)
+
+    parts = assistant_system_parts("private context", "action completed")
+    text = "\n".join(part["text"] for part in parts)
+
+    assert "SPECIAL AGENT RULE" in text
+    assert "private context" in text
+    assert "action completed" in text
 
 
 def test_assistant_learns_user_corrections_without_provider_key() -> None:

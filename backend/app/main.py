@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import ipaddress
 import os
+from pathlib import Path
 import re
 import secrets
 import sqlite3
@@ -30,6 +31,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 
 ActivityLevel = Literal["light", "balanced", "active"]
+DietType = Literal["balanced", "cut", "muscle"]
 MealType = Literal["Breakfast", "Lunch", "Dinner"]
 MealSlot = Literal["breakfast", "lunch", "dinner", "snack"]
 CalendarEventType = Literal["meal", "training", "task", "note"]
@@ -37,6 +39,8 @@ CalendarEventStatus = Literal["planned", "done", "skipped"]
 UserRole = Literal["user", "admin"]
 SecuritySeverity = Literal["info", "warning", "critical"]
 AssistantRole = Literal["user", "assistant"]
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -61,6 +65,7 @@ AUTH_REQUESTS_PER_MINUTE = 24
 INTRUDER_BLOCK_THRESHOLD = 5
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+AGENT_INSTRUCTIONS_PATH = Path(os.getenv("AGENT_INSTRUCTIONS_PATH", str(PROJECT_ROOT / "AGENTS.md")))
 ADMIN_EMAILS = {
     email.strip().lower()
     for email in os.getenv("TRACKFOODAI_ADMIN_EMAILS", "").split(",")
@@ -294,6 +299,9 @@ class RegisterRequest(BaseModel):
     password: str = Field(..., min_length=8, max_length=72)
     calorie_goal: int = Field(1850, ge=1000, le=6000)
     activity_level: ActivityLevel = "balanced"
+    weight_kg: float | None = Field(None, ge=25, le=350)
+    height_cm: float | None = Field(None, ge=90, le=260)
+    diet_type: DietType = "balanced"
 
     @field_validator("name", "email")
     @classmethod
@@ -337,6 +345,9 @@ class PublicProfile(BaseModel):
     avatar_data_url: str | None = None
     calorie_goal: int
     activity_level: ActivityLevel
+    weight_kg: float | None = None
+    height_cm: float | None = None
+    diet_type: DietType = "balanced"
     role: UserRole = "user"
     created_at: str
 
@@ -352,6 +363,9 @@ class ProfileUpdateRequest(BaseModel):
     avatar_data_url: str | None = Field(None, max_length=260_000)
     calorie_goal: int | None = Field(None, ge=1000, le=6000)
     activity_level: ActivityLevel | None = None
+    weight_kg: float | None = Field(None, ge=25, le=350)
+    height_cm: float | None = Field(None, ge=90, le=260)
+    diet_type: DietType | None = None
 
     @field_validator("name", "phone_number")
     @classmethod
@@ -551,11 +565,17 @@ class AssistantContextResponse(BaseModel):
 class AssistantMessageCreateRequest(BaseModel):
     message: str = Field(..., min_length=2, max_length=1200)
     context_id: str | None = None
+    client_context: str | None = Field(None, max_length=3000)
 
     @field_validator("message")
     @classmethod
     def validate_message(cls, value: str) -> str:
         return assert_chat_clean(value)
+
+    @field_validator("client_context")
+    @classmethod
+    def validate_client_context(cls, value: str | None) -> str | None:
+        return assert_chat_clean(value) if value else None
 
 
 class AssistantMessageResponse(BaseModel):
@@ -723,6 +743,9 @@ def init_storage() -> None:
                     password_scheme TEXT NOT NULL DEFAULT 'pbkdf2',
                     calorie_goal INTEGER NOT NULL CHECK (calorie_goal BETWEEN 1000 AND 6000),
                     activity_level TEXT NOT NULL CHECK (activity_level IN ('light', 'balanced', 'active')),
+                    weight_kg NUMERIC(6, 2),
+                    height_cm NUMERIC(6, 2),
+                    diet_type TEXT NOT NULL DEFAULT 'balanced' CHECK (diet_type IN ('balanced', 'cut', 'muscle')),
                     role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
@@ -732,6 +755,9 @@ def init_storage() -> None:
                 "phone_number TEXT",
                 "avatar_data_url TEXT",
                 "password_scheme TEXT NOT NULL DEFAULT 'pbkdf2'",
+                "weight_kg NUMERIC(6, 2)",
+                "height_cm NUMERIC(6, 2)",
+                "diet_type TEXT NOT NULL DEFAULT 'balanced' CHECK (diet_type IN ('balanced', 'cut', 'muscle'))",
                 "role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin'))",
             ]:
                 cur.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {column}")
@@ -1227,6 +1253,9 @@ def to_public_profile(user: dict[str, Any]) -> PublicProfile:
         avatar_data_url=user.get("avatar_data_url"),
         calorie_goal=int(user["calorie_goal"]),
         activity_level=user["activity_level"],
+        weight_kg=float(user["weight_kg"]) if user.get("weight_kg") is not None else None,
+        height_cm=float(user["height_cm"]) if user.get("height_cm") is not None else None,
+        diet_type=user.get("diet_type") or "balanced",
         role=user.get("role") or role_for_email(user["email"]),
         created_at=isoformat(user["created_at"]),
     )
@@ -1255,6 +1284,9 @@ def create_user(payload: RegisterRequest) -> dict[str, Any]:
             "password_scheme": "bcrypt",
             "calorie_goal": payload.calorie_goal,
             "activity_level": payload.activity_level,
+            "weight_kg": payload.weight_kg,
+            "height_cm": payload.height_cm,
+            "diet_type": payload.diet_type,
             "role": role,
             "created_at": now_iso(),
         }
@@ -1269,9 +1301,9 @@ def create_user(payload: RegisterRequest) -> dict[str, Any]:
                     """
                     INSERT INTO users (
                         id, name, email, phone_number, avatar_data_url, password_hash, salt,
-                        password_scheme, calorie_goal, activity_level, role
+                        password_scheme, calorie_goal, activity_level, weight_kg, height_cm, diet_type, role
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING *
                     """,
                     (
@@ -1285,6 +1317,9 @@ def create_user(payload: RegisterRequest) -> dict[str, Any]:
                         "bcrypt",
                         payload.calorie_goal,
                         payload.activity_level,
+                        payload.weight_kg,
+                        payload.height_cm,
+                        payload.diet_type,
                         role,
                     ),
                 )
@@ -1338,6 +1373,9 @@ def update_user_profile(user_id: str, payload: ProfileUpdateRequest) -> dict[str
         "avatar_data_url",
         "calorie_goal",
         "activity_level",
+        "weight_kg",
+        "height_cm",
+        "diet_type",
     }
     assignments = [f"{key} = %s" for key in updates if key in allowed]
     values = [updates[key] for key in updates if key in allowed]
@@ -2648,6 +2686,9 @@ def build_assistant_app_context(user: dict[str, Any]) -> str:
         f"Email: {user['email']}",
         f"Daily calorie goal: {user['calorie_goal']} kcal",
         f"Activity level: {user['activity_level']}",
+        f"Weight: {user.get('weight_kg') or 'not set'} kg",
+        f"Height: {user.get('height_cm') or 'not set'} cm",
+        f"Diet type: {user.get('diet_type') or 'balanced'}",
         f"Today calories logged: {calories_logged} kcal",
         f"Today remaining calories: {max(int(user['calorie_goal']) - calories_logged, 0)} kcal",
     ]
@@ -2762,6 +2803,91 @@ def assistant_unsafe_app_request(message: str) -> str | None:
         "I can safely work inside the app: add food to your diary, create calendar plans, and use your profile, "
         "daily calories, and logged meals."
     )
+
+
+def parse_client_number(pattern: str, client_context: str | None) -> int | None:
+    if not client_context:
+        return None
+    match = re.search(pattern, client_context, flags=re.I)
+    if not match:
+        return None
+    return int(match.group(1).replace(",", "").replace(" ", ""))
+
+
+def assistant_balance_reply(
+    user: dict[str, Any],
+    message: str,
+    client_context: str | None = None,
+) -> str | None:
+    lowered = message.lower()
+    markers = (
+        "сколько",
+        "осталось",
+        "калор",
+        "баланс",
+        "left",
+        "remaining",
+        "balance",
+        "calorie",
+        "calorías",
+        "quedan",
+    )
+    if not any(marker in lowered for marker in markers):
+        return None
+
+    language = assistant_language(message)
+    logged = parse_client_number(r"Today totals in mobile UI:\s*([0-9, ]+)\s*kcal", client_context)
+    remaining = parse_client_number(r"Today remaining in mobile UI:\s*([0-9, ]+)\s*kcal", client_context)
+    protein = parse_client_number(r"protein\s*([0-9, ]+)g", client_context)
+    carbs = parse_client_number(r"carbs\s*([0-9, ]+)g", client_context)
+    fat = parse_client_number(r"fat\s*([0-9, ]+)g", client_context)
+
+    if logged is None or remaining is None:
+        today = app_now().date()
+        today_meals = [
+            meal
+            for meal in list_meals_for_user(str(user["id"]))
+            if local_day_key(meal.logged_at) == today.isoformat()
+        ]
+        logged = sum(meal.calories for meal in today_meals)
+        remaining = max(int(user["calorie_goal"]) - logged, 0)
+        protein = sum(meal.protein_g for meal in today_meals)
+        carbs = sum(meal.carbs_g for meal in today_meals)
+        fat = sum(meal.fat_g for meal in today_meals)
+
+    goal = int(user["calorie_goal"])
+    if client_context:
+        goal = parse_client_number(r"goal\s*([0-9, ]+)\s*kcal", client_context) or goal
+
+    if language == "ru":
+        return (
+            f"Осталось {remaining} kcal из цели {goal} kcal. Уже записано {logged} kcal.\n\n"
+            f"Макросы сейчас: белок {protein or 0}g, углеводы {carbs or 0}g, жиры {fat or 0}g. "
+            "Это данные текущего дневника, не шаблон."
+        )
+    if language == "es":
+        return (
+            f"Quedan {remaining} kcal de una meta de {goal} kcal. Ya hay {logged} kcal registradas.\n\n"
+            f"Macros ahora: proteína {protein or 0}g, carbs {carbs or 0}g, grasa {fat or 0}g. "
+            "Esto sale del diario actual, no de una plantilla."
+        )
+    return (
+        f"You have {remaining} kcal left from a {goal} kcal goal. Logged so far: {logged} kcal.\n\n"
+        f"Current macros: protein {protein or 0}g, carbs {carbs or 0}g, fat {fat or 0}g. "
+        "This comes from the current diary, not a canned template."
+    )
+
+
+def is_canned_assistant_reply(reply: str) -> bool:
+    lowered = reply.lower()
+    canned_markers = (
+        "выберите один из вариантов",
+        "добавьте в дневник питания",
+        "i can help you with",
+        "please choose one of the options",
+        "elige una de las opciones",
+    )
+    return any(marker in lowered for marker in canned_markers)
 
 
 def clean_calendar_title(message: str) -> str:
@@ -3196,8 +3322,10 @@ def assistant_food_log_action(user_id: str, message: str) -> str | None:
 ASSISTANT_SYSTEM_PROMPT = (
     "You are TrackFood AI, a sharp nutrition and planning assistant inside a food tracker. "
     "You are multilingual: answer in the same language the user uses, especially English, Russian, or Spanish. "
+    "This language rule is strict: if the latest user message is Russian, every sentence must be Russian; if Spanish, every sentence must be Spanish. "
     "If the user mixes languages, follow the dominant language or the language they explicitly request. "
     "Your voice is direct, simple, human, and a little distinctive. Do not sound like a generic polite chatbot. "
+    "Do not reuse canned examples, fixed templates, or the same recommendation repeatedly. Each reply must react to the latest message and the private app context. "
     "No long apologies, no corporate filler, no 'as an AI language model', no motivational fluff. "
     "Help with meal ideas, product choices, diary reflection, calendar planning, and habit building. "
     "You can use the private app context supplied by the backend: profile, calorie goal, meals, calendar plans, and relevant product database matches with prices. "
@@ -3208,6 +3336,7 @@ ASSISTANT_SYSTEM_PROMPT = (
     "For nutrition estimates, always name the assumption: grams, serving, or package. If grams are missing, ask one short clarification or propose a realistic default and say it should be confirmed in the app. "
     "When useful, suggest concrete app actions like add to diary, edit grams, create a reminder, or duplicate a recent meal. "
     "If a calendar action was completed by the backend, clearly say it was added and mention the date/time. "
+    "If project AGENTS.md instructions are supplied, treat them as app-specific operating rules and reconcile your answer with them. "
     "If the user corrects you or says remember/запомни/recuerda, treat that as a lesson for future replies. "
     "Preferred structure: answer first, then one tiny next-action label in the user's language when useful: Russian 'Что дальше:', Spanish 'Qué hacer ahora:', English 'What to do now:'. Never use English labels in a Russian or Spanish reply. "
     "Do not diagnose, treat, or replace medical advice. Keep answers practical and safe. "
@@ -3215,6 +3344,24 @@ ASSISTANT_SYSTEM_PROMPT = (
     "Use short paragraphs, clear labels, and numbered steps only when they make the answer easier to scan. "
     "Keep most answers under 130 words unless the user asks for a detailed plan."
 )
+
+
+def load_agent_instructions() -> str:
+    try:
+        return AGENT_INSTRUCTIONS_PATH.read_text(encoding="utf-8").strip()[:6000]
+    except OSError:
+        return ""
+
+
+def assistant_system_parts(app_context: str, action_note: str = "") -> list[dict[str, str]]:
+    parts = [{"text": ASSISTANT_SYSTEM_PROMPT}]
+    agent_instructions = load_agent_instructions()
+    if agent_instructions:
+        parts.append({"text": f"Project AGENTS.md instructions:\n{agent_instructions}"})
+    parts.append({"text": app_context})
+    if action_note:
+        parts.append({"text": action_note})
+    return parts
 
 
 def generate_assistant_reply(
@@ -3235,12 +3382,9 @@ def generate_assistant_reply(
         }
         for message in messages[-12:]
     ]
-    system_parts = [{"text": ASSISTANT_SYSTEM_PROMPT}, {"text": app_context}]
-    if action_note:
-        system_parts.append({"text": action_note})
 
     payload = {
-        "systemInstruction": {"parts": system_parts},
+        "systemInstruction": {"parts": assistant_system_parts(app_context, action_note)},
         "contents": contents,
         "generationConfig": {
             "temperature": 0.45,
@@ -3691,6 +3835,19 @@ def create_assistant_message(
         log_security_event("assistant_safe_refusal", "info", request, user_id, "Unsafe app request refused")
         return assistant_message
 
+    balance_reply = assistant_balance_reply(user, payload.message, payload.client_context)
+    if balance_reply:
+        assistant_message = create_assistant_message_for_user(
+            user_id,
+            context.id,
+            "assistant",
+            balance_reply,
+            provider="trackfoodai",
+            model="safe-action-router",
+        )
+        log_security_event("assistant_balance_action", "info", request, user_id, "Assistant balance handled")
+        return assistant_message
+
     previous_suggestion_reply = assistant_add_previous_suggestion_action(user_id, payload.message, existing)
     if previous_suggestion_reply:
         assistant_message = create_assistant_message_for_user(
@@ -3739,6 +3896,7 @@ def create_assistant_message(
             part
             for part in (
                 build_assistant_app_context(user),
+                f"Live client UI context from the current device:\n{payload.client_context}" if payload.client_context else "",
                 assistant_relevant_products_context(payload.message),
                 f"Latest user message language: {assistant_language(payload.message)}. Keep the entire reply in that language, including section labels and final action line.",
             )
@@ -3747,6 +3905,12 @@ def create_assistant_message(
         action_note,
     )
     reply = localize_assistant_reply(reply, assistant_language(payload.message))
+    if is_canned_assistant_reply(reply):
+        reply = assistant_balance_reply(user, payload.message, payload.client_context) or (
+            "Не буду отвечать общей заготовкой. Напиши конкретнее: продукт, граммовку, цель или действие в календаре."
+            if assistant_language(payload.message) == "ru"
+            else "I will not answer with a canned template. Send a product, grams, goal, or calendar action."
+        )
     assistant_message = create_assistant_message_for_user(user_id, context.id, "assistant", reply)
     log_security_event("assistant_message", "info", request, user_id, "Assistant reply generated")
     return assistant_message

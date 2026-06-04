@@ -575,6 +575,45 @@ function readStoredProfile() {
   }
 }
 
+function clearClientAuthStorage() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  [
+    "trackfood-token",
+    "trackfood-profile",
+    "trackfood-saved-foods",
+  ].forEach((key) => window.localStorage.removeItem(key));
+
+  for (let index = window.sessionStorage.length - 1; index >= 0; index -= 1) {
+    const key = window.sessionStorage.key(index);
+    if (key?.startsWith("trackfood-")) {
+      window.sessionStorage.removeItem(key);
+    }
+  }
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker
+      .getRegistrations()
+      .then((registrations) =>
+        Promise.all(registrations.map((registration) => registration.unregister())),
+      )
+      .catch(() => {
+        // Cache cleanup is best-effort after logout.
+      });
+  }
+
+  if ("caches" in window) {
+    window.caches
+      .keys()
+      .then((keys) => Promise.all(keys.map((key) => window.caches.delete(key))))
+      .catch(() => {
+        // Cache cleanup is best-effort after logout.
+      });
+  }
+}
+
 function FoodVisual({ food, size = "md" }: { food: FoodItem; size?: "sm" | "md" | "lg" }) {
   const canUseNextImage = food.image.startsWith("/");
 
@@ -1689,17 +1728,42 @@ export default function TrackFoodApp() {
     }, 4200);
   }
 
-  function handleSessionExpired() {
+  function resetSession(message: string, tone: ToastTone = "info") {
     setToken(null);
     setProfile(null);
     setMeals([]);
     setCalendarEvents([]);
     setAssistantContexts([]);
+    setActiveAssistantContextId(null);
+    setContextTitle("New context");
     setAssistantMessages([]);
-    window.localStorage.removeItem("trackfood-token");
-    window.localStorage.removeItem("trackfood-profile");
-    setStatus(SESSION_EXPIRED_MESSAGE);
-    showToast(SESSION_EXPIRED_MESSAGE, "error");
+    setSecuritySummary(null);
+    setIntruders([]);
+    setSavedFoodIds([]);
+    setSelectedFood(null);
+    setEditingMeal(null);
+    setEstimate(null);
+    setPhotoPreview(null);
+    setBarcodeText("");
+    setActiveTab("home");
+    setAuthMode("login");
+    setAuthForm((current) => ({
+      ...current,
+      name: "",
+      email: "",
+      password: "",
+    }));
+    clearClientAuthStorage();
+    setStatus(message);
+    showToast(message, tone);
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", "/");
+      window.scrollTo({ top: 0, behavior: "auto" });
+    }
+  }
+
+  function handleSessionExpired() {
+    resetSession(SESSION_EXPIRED_MESSAGE, "error");
   }
 
   function handleSaveError(error: unknown, fallback = "Save failed") {
@@ -2015,19 +2079,7 @@ export default function TrackFoodApp() {
   }
 
   function logout() {
-    setToken(null);
-    setProfile(null);
-    setMeals([]);
-    setCalendarEvents([]);
-    setAssistantContexts([]);
-    setActiveAssistantContextId(null);
-    setContextTitle("New context");
-    setAssistantMessages([]);
-    setSecuritySummary(null);
-    setIntruders([]);
-    window.localStorage.removeItem("trackfood-token");
-    window.localStorage.removeItem("trackfood-profile");
-    setStatus("Logged out");
+    resetSession("Logged out. Login or register to continue.", "success");
   }
 
   function exportAccountData() {

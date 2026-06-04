@@ -129,7 +129,7 @@ function InsightsScreen({ go, data }) {
   );
 }
 
-function ProfileScreen({ go, data, openTweaks, onLogout, notify }) {
+function ProfileScreen({ go, data, profile: accountProfile, openTweaks, onLogout, notify }) {
   const t = useTheme();
   const { totals } = data;
   const left = Math.max(0, GOALS.kcal - totals.kcal);
@@ -137,10 +137,19 @@ function ProfileScreen({ go, data, openTweaks, onLogout, notify }) {
     ['Today', fmt(totals.kcal), `${fmt(left)} kcal left`],
     ['Meals', String(totals.count), 'logged today'],
     ['Plans', String(data.plans.length), dateKey(0)],
-    ['Routine', 'Balanced', 'activity'],
+    ['Goal', fmt(GOALS.kcal), accountProfile?.diet || 'balanced'],
   ];
 
-  const profile = { name: 'Alex Rivera', email: 'alex.rivera@gmail.com', phone: '+34 676 76 76 67', units: 'Metric · grams / kg' };
+  const profile = {
+    name: accountProfile?.name || 'Alex Rivera',
+    email: accountProfile?.email || 'alex.rivera@gmail.com',
+    weightKg: accountProfile?.weightKg || 72,
+    heightCm: accountProfile?.heightCm || 178,
+    diet: accountProfile?.diet || 'balanced',
+    calorieGoal: accountProfile?.calorieGoal || GOALS.kcal,
+    phone: '+34 676 76 76 67',
+    units: 'Metric · grams / kg'
+  };
 
   const exportJSON = () => {
     const payload = {
@@ -169,7 +178,10 @@ function ProfileScreen({ go, data, openTweaks, onLogout, notify }) {
   };
 
   const changeAvatar = () => notify && notify('Avatar upload is coming soon');
-  const logOut = () => onLogout && onLogout();
+  const logOut = () => {
+    notify && notify('Device session cleared');
+    onLogout && onLogout();
+  };
   return (
     <div>
       <TopBar go={go} title="Profile" showProfile={false} />
@@ -218,7 +230,7 @@ function ProfileScreen({ go, data, openTweaks, onLogout, notify }) {
       <Card pad={16} style={{ marginBottom: 14 }}>
         <Eyebrow>Account</Eyebrow>
         <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 0 }}>
-          {[['Phone linked', profile.phone], ['Email', profile.email], ['Units', profile.units], ['Display name', profile.name]].map(([l, v], i, arr) => (
+          {[['Phone linked', profile.phone], ['Email', profile.email], ['Weight', `${profile.weightKg} kg`], ['Height', `${profile.heightCm} cm`], ['Diet', profile.diet], ['Daily goal', `${fmt(profile.calorieGoal)} kcal`], ['Units', profile.units], ['Display name', profile.name]].map(([l, v], i, arr) => (
             <div key={l} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 0', borderBottom: i < arr.length - 1 ? `1px solid ${t.line}` : 'none' }}>
               <span style={{ color: t.muted, fontSize: 14 }}>{l}</span>
               <span style={{ color: t.text, fontWeight: 600, fontSize: 14 }}>{v}</span>

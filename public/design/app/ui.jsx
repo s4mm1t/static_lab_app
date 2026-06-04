@@ -115,11 +115,12 @@ function MacroBar({ label, value, goal, color, unit = 'g', delay = 0 }) {
 }
 
 // ── Card ──────────────────────────────────────────────────────────────
-function Card({ children, style, pad = 18, onClick, glow }) {
+function Card({ children, style, pad = 18, onClick, glow, className }) {
   const t = useTheme();
   return (
-    <div onClick={onClick} style={{
+    <div className={className} onClick={onClick} style={{
       background: t.panel, border: `1px solid ${t.line}`, borderRadius: 22, padding: pad,
+      transition: 'transform .22s cubic-bezier(.22,1,.3,1), box-shadow .22s cubic-bezier(.22,1,.3,1)',
       boxShadow: glow ? `0 0 0 1px ${t.accent}33, 0 10px 30px ${t.accentGlow}` : t.cardShadow,
       cursor: onClick ? 'pointer' : 'default', ...style,
     }}>{children}</div>
@@ -127,7 +128,7 @@ function Card({ children, style, pad = 18, onClick, glow }) {
 }
 
 // ── Button ────────────────────────────────────────────────────────────
-function Btn({ children, onClick, variant = 'primary', size = 'md', style, icon, full }) {
+function Btn({ children, onClick, variant = 'primary', size = 'md', style, icon, full, type = 'button' }) {
   const t = useTheme();
   const [press, setPress] = React.useState(false);
   const base = {
@@ -147,7 +148,7 @@ function Btn({ children, onClick, variant = 'primary', size = 'md', style, icon,
     danger:  { background: 'rgba(255,96,96,0.12)', color: t.danger, border: '1px solid rgba(255,96,96,0.3)' },
   };
   return (
-    <button onClick={onClick}
+    <button type={type} onClick={onClick}
       onPointerDown={() => setPress(true)} onPointerUp={() => setPress(false)} onPointerLeave={() => setPress(false)}
       style={{ ...base, ...variants[variant], ...style }}>
       {icon && <Icon name={icon} size={size === 'sm' ? 16 : 18} stroke={2.4} />}
@@ -195,6 +196,69 @@ function Sheet({ open, onClose, children, title }) {
         {children}
       </div>
     </div>
+  );
+}
+
+function PortionSheet({ open, food, initialGrams, title = 'Choose amount', confirmLabel = 'Add to diary', onConfirm, onClose }) {
+  const t = useTheme();
+  const fallback = food?.quantityG || food?.servingG || initialGrams || 100;
+  const [grams, setGrams] = React.useState(fallback);
+  React.useEffect(() => {
+    if (open) setGrams(food?.quantityG || food?.servingG || initialGrams || 100);
+  }, [open, food, initialGrams]);
+  if (!food) return null;
+  const amount = Math.max(5, Math.min(5000, Number(grams) || 0));
+  const source = FOOD_DB.find(item => item.id === (food.baseId || food.id)) || food;
+  const preview = scaleFoodPortion(source, amount);
+  const quick = [50, 100, 150, 200, 250, 300];
+  const input = {
+    width: '100%', boxSizing: 'border-box', background: t.panel, border: `1px solid ${t.line2}`,
+    borderRadius: 16, padding: '13px 15px', color: t.text, fontSize: 22, fontWeight: 800,
+    fontFamily: 'var(--display)', outline: 'none',
+  };
+  return (
+    <Sheet open={open} onClose={onClose} title={title}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+        <div style={{ width: 52, height: 52, borderRadius: 15, background: t.elev, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 25 }}>{food.emoji}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ color: t.text, fontWeight: 800, fontSize: 17 }}>{source.name}</div>
+          <div style={{ color: t.faint, fontSize: 12, marginTop: 2 }}>{source.brand} · base {source.servingG || 100}g</div>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginBottom: 12 }}>
+        {quick.map(g => (
+          <button key={g} type="button" onClick={() => setGrams(g)} style={{
+            border: `1px solid ${amount === g ? t.accent : t.line2}`,
+            background: amount === g ? `${t.accent}18` : t.panel,
+            color: amount === g ? t.accent : t.muted,
+            borderRadius: 999, padding: '10px 8px', fontSize: 13, fontWeight: 800,
+          }}>
+            {g}g
+          </button>
+        ))}
+      </div>
+
+      <label style={{ display: 'block', color: t.muted, fontSize: 12, fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 7 }}>Grams</label>
+      <div style={{ position: 'relative', marginBottom: 14 }}>
+        <input value={grams} onChange={e => setGrams(e.target.value.replace(/[^\d]/g, ''))} inputMode="numeric" style={{ ...input, paddingRight: 48 }} />
+        <span style={{ position: 'absolute', right: 16, top: '50%', transform: 'translateY(-50%)', color: t.faint, fontWeight: 800 }}>g</span>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginBottom: 14 }}>
+        {[['kcal', preview.kcal, t.accent], ['Protein', preview.protein + 'g', MACROS.protein.color], ['Carbs', preview.carbs + 'g', MACROS.carbs.color], ['Fat', preview.fat + 'g', MACROS.fat.color]].map(([label, value, color]) => (
+          <div key={label} style={{ background: t.elev, borderRadius: 14, padding: '11px 8px', textAlign: 'center' }}>
+            <div style={{ color, fontWeight: 900, fontSize: 16, fontFamily: 'var(--display)' }}>{value}</div>
+            <div style={{ color: t.faint, fontSize: 10, fontWeight: 700 }}>{label}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: t.muted, fontSize: 13, marginBottom: 14 }}>
+        <span>Estimated price</span>
+        <span style={{ color: t.text, fontWeight: 800 }}>{preview.priceTotal != null ? eur(preview.priceTotal) : 'price n/a'}</span>
+      </div>
+      <Btn full icon="check" onClick={() => onConfirm(amount)}>{confirmLabel}</Btn>
+    </Sheet>
   );
 }
 
@@ -251,4 +315,4 @@ function LogoBadge({ size = 34, radius = 11 }) {
   );
 }
 
-Object.assign(window, { Icon, CountUp, Ring, MacroBar, Card, Btn, Chip, Sheet, Toast, Eyebrow, LogoMark, LogoBadge });
+Object.assign(window, { Icon, CountUp, Ring, MacroBar, Card, Btn, Chip, Sheet, PortionSheet, Toast, Eyebrow, LogoMark, LogoBadge });

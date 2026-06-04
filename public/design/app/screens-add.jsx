@@ -7,6 +7,7 @@ function AddScreen({ go, data, addFood, notify, initial }) {
   const [q, setQ] = React.useState('');
   const [brand, setBrand] = React.useState('All');
   const [added, setAdded] = React.useState({});
+  const [portionFood, setPortionFood] = React.useState(null);
 
   const modes = [
     { id: 'search', label: 'Search', sub: 'Products & brands', icon: 'search' },
@@ -19,10 +20,15 @@ function AddScreen({ go, data, addFood, notify, initial }) {
     (!q || f.name.toLowerCase().includes(q.toLowerCase()) || f.brand.toLowerCase().includes(q.toLowerCase()))
   );
 
-  const doAdd = (food) => {
-    addFood(food, meal);
+  const previewFood = (food) => scaleFoodPortion(food, food.servingG || 100);
+  const requestAdd = (food) => setPortionFood(food);
+  const confirmAdd = (grams) => {
+    const food = portionFood;
+    if (!food) return;
+    addFood(food, meal, grams);
     setAdded(a => ({ ...a, [food.id]: true }));
-    notify(`Added to ${meal}`);
+    notify(`Added ${grams}g to ${meal}`);
+    setPortionFood(null);
     setTimeout(() => setAdded(a => ({ ...a, [food.id]: false })), 1400);
   };
 
@@ -71,9 +77,12 @@ function AddScreen({ go, data, addFood, notify, initial }) {
                   <div style={{ width: 42, height: 42, borderRadius: 12, background: t.elev, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 21 }}>{f.emoji}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ color: t.text, fontWeight: 700, fontSize: 15 }}>{f.name}</div>
-                    <div style={{ color: t.faint, fontSize: 12 }}>{f.brand} · {f.kcal} kcal · P{f.protein} C{f.carbs} F{f.fat}</div>
+                    <div style={{ color: t.faint, fontSize: 12 }}>
+                      {f.brand} · {previewFood(f).kcal} kcal · {f.servingG || 100}g serving · {previewFood(f).priceTotal != null ? eur(previewFood(f).priceTotal) : 'price n/a'}
+                    </div>
+                    <div style={{ color: t.faint, fontSize: 11, marginTop: 2 }}>P{previewFood(f).protein} C{previewFood(f).carbs} F{previewFood(f).fat}</div>
                   </div>
-                  <button onClick={() => doAdd(f)} style={{
+                  <button onClick={() => requestAdd(f)} aria-label={`Choose grams for ${f.name}`} style={{
                     width: 36, height: 36, borderRadius: 11, cursor: 'pointer', flexShrink: 0,
                     border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center',
                     background: added[f.id] ? t.accent : t.elev, color: added[f.id] ? t.accentOn : t.text,
@@ -89,35 +98,48 @@ function AddScreen({ go, data, addFood, notify, initial }) {
         </div>
       )}
 
-      {mode === 'barcode' && <BarcodeMode meal={meal} doAdd={doAdd} added={added} />}
-      {mode === 'photo' && <PhotoMode meal={meal} doAdd={doAdd} added={added} />}
+      {mode === 'barcode' && <BarcodeMode requestAdd={requestAdd} added={added} />}
+      {mode === 'photo' && <PhotoMode requestAdd={requestAdd} added={added} />}
+      <PortionSheet
+        open={!!portionFood}
+        food={portionFood}
+        title="Choose grams"
+        confirmLabel="Add to diary"
+        onConfirm={confirmAdd}
+        onClose={() => setPortionFood(null)}
+      />
     </div>
   );
 }
 
-function BarcodeMode({ doAdd, added }) {
+function BarcodeMode({ requestAdd, added }) {
   const t = useTheme();
-  const [code, setCode] = React.useState('843700');
+  const inputRef = React.useRef(null);
+  const [code, setCode] = React.useState('');
   const [scanning, setScanning] = React.useState(false);
   const [found, setFound] = React.useState(null);
-  const scan = () => {
+  const [preview, setPreview] = React.useState('');
+  const scan = (file) => {
+    if (file) setPreview(URL.createObjectURL(file));
     setScanning(true); setFound(null);
     setTimeout(() => { setScanning(false); setFound(FOOD_DB[5]); }, 2100);
   };
+  const foundPreview = found ? scaleFoodPortion(found, found.servingG || 100) : null;
   return (
     <div>
       <div style={{ color: t.muted, fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Barcode</div>
       <div style={{ display: 'flex', gap: 9, marginBottom: 14 }}>
         <input value={code} onChange={e => setCode(e.target.value)} placeholder="843700…" style={inputStyle(t, { flex: 1, fontFamily: 'var(--display)' })} />
-        <Btn variant="light" onClick={scan}>Find</Btn>
+        <Btn variant="light" onClick={() => scan()}>Find</Btn>
       </div>
 
-      {/* scan viewport */}
+      <input ref={inputRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
+        onChange={e => scan(e.target.files && e.target.files[0])} />
       <div style={{ position: 'relative', height: 200, borderRadius: 20, overflow: 'hidden',
-        background: 'radial-gradient(120% 120% at 50% 0%, #0c1a14 0%, #060a08 70%)',
+        background: preview ? '#0a0d12' : t.panel,
         border: `1px solid ${scanning ? t.accent : t.line2}`, transition: 'border-color .3s',
         display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
-        {/* corner brackets */}
+        {preview && <img src={preview} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
         {[[12,12,1,1],[null,12,-1,1],[12,null,1,-1],[null,null,-1,-1]].map((c,i)=>(
           <div key={i} style={{ position:'absolute', width:26, height:26,
             top: c[0]!=null?c[0]:'auto', left: c[1]!=null?c[1]:'auto',
@@ -127,12 +149,11 @@ function BarcodeMode({ doAdd, added }) {
             borderTopLeftRadius: c[2]>0&&c[3]>0?8:0, borderTopRightRadius: c[2]>0&&c[3]<0?8:0,
             borderBottomLeftRadius: c[2]<0&&c[3]>0?8:0, borderBottomRightRadius: c[2]<0&&c[3]<0?8:0 }} />
         ))}
-        {/* fake barcode */}
-        <div style={{ display: 'flex', gap: 3, alignItems: 'center', opacity: 0.5 }}>
-          {[3,1,2,1,4,1,2,3,1,2,1,4,2,1,3,1,2].map((w,i)=>(
-            <div key={i} style={{ width: w, height: 70, background: t.text }} />
-          ))}
-        </div>
+        {!preview && <div style={{ textAlign: 'center', color: t.muted, padding: 20 }}>
+          <span style={{ display: 'flex', justifyContent: 'center', marginBottom: 10 }}><Icon name="camera" size={34} stroke={1.8} /></span>
+          <div style={{ color: t.text, fontWeight: 800 }}>Use phone camera</div>
+          <div style={{ fontSize: 12, marginTop: 4 }}>Point at the product barcode</div>
+        </div>}
         {scanning && <div style={{ position: 'absolute', left: 24, right: 24, height: 2.5, borderRadius: 99,
           background: t.accent, boxShadow: `0 0 14px 3px ${t.accent}`, animation: 'scanline 1.1s ease-in-out infinite' }} />}
         {scanning && <div style={{ position: 'absolute', bottom: 12, color: t.accent, fontSize: 12, fontWeight: 700 }}>Scanning…</div>}
@@ -145,27 +166,35 @@ function BarcodeMode({ doAdd, added }) {
             <div style={{ flex: 1 }}>
               <div style={{ color: t.accent, fontSize: 11, fontWeight: 700, letterSpacing: 0.6 }}>MATCH FOUND</div>
               <div style={{ color: t.text, fontWeight: 700, fontSize: 16 }}>{found.name}</div>
-              <div style={{ color: t.faint, fontSize: 12 }}>{found.brand} · {found.kcal} kcal</div>
+              <div style={{ color: t.faint, fontSize: 12 }}>{found.brand} · {found.servingG || 100}g serving · {foundPreview.kcal} kcal · {foundPreview.priceTotal != null ? eur(foundPreview.priceTotal) : 'price n/a'}</div>
             </div>
-            <Btn size="sm" onClick={() => doAdd(found)} icon={added[found.id] ? 'check' : 'plus'}>{added[found.id] ? 'Added' : 'Add'}</Btn>
+            <Btn size="sm" onClick={() => requestAdd(found)} icon={added[found.id] ? 'check' : 'plus'}>{added[found.id] ? 'Added' : 'Add'}</Btn>
           </div>
         </Card>
       ) : (
-        <Btn full variant="ghost" icon="camera" onClick={scan}>Scan with camera</Btn>
+        <Btn full variant="ghost" icon="camera" onClick={() => inputRef.current && inputRef.current.click()}>Open phone camera</Btn>
       )}
     </div>
   );
 }
 
-function PhotoMode({ doAdd, added }) {
+function PhotoMode({ requestAdd, added }) {
   const t = useTheme();
+  const inputRef = React.useRef(null);
   const [state, setState] = React.useState('empty'); // empty | analyzing | done
+  const [preview, setPreview] = React.useState('');
   const recog = FOOD_DB[2]; // chicken rice bowl
-  const start = () => { setState('analyzing'); setTimeout(() => setState('done'), 2400); };
+  const start = (file) => {
+    if (file) setPreview(URL.createObjectURL(file));
+    setState('analyzing'); setTimeout(() => setState('done'), 2400);
+  };
+  const recogPreview = scaleFoodPortion(recog, recog.servingG || 100);
   return (
     <div>
       <div style={{ color: t.muted, fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Snap a meal — AI estimates the macros</div>
-      <div onClick={state === 'empty' ? start : undefined} style={{
+      <input ref={inputRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
+        onChange={e => start(e.target.files && e.target.files[0])} />
+      <div onClick={state === 'empty' ? () => inputRef.current && inputRef.current.click() : undefined} style={{
         position: 'relative', height: 230, borderRadius: 20, overflow: 'hidden', cursor: state === 'empty' ? 'pointer' : 'default',
         border: state === 'empty' ? `1.5px dashed ${t.line2}` : `1px solid ${state === 'done' ? t.accent : t.line2}`,
         background: state === 'empty' ? t.panel : '#0a0d12', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12,
@@ -175,15 +204,16 @@ function PhotoMode({ doAdd, added }) {
           <div style={{ textAlign: 'center', color: t.muted }}>
             <span style={{ display: 'flex', justifyContent: 'center', marginBottom: 10, color: t.faint }}><Icon name="camera" size={34} stroke={1.8} /></span>
             <div style={{ fontWeight: 700, color: t.text, fontSize: 15 }}>Tap to add food photo</div>
-            <div style={{ fontSize: 12, marginTop: 3 }}>Camera or upload</div>
+            <div style={{ fontSize: 12, marginTop: 3 }}>Opens phone camera or upload</div>
           </div>
         )}
         {state !== 'empty' && (
           <>
-            <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(135deg,#3a2418,#1a1410 60%,#241a12)',
-              backgroundSize: 'cover' }}>
-              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 80, opacity: 0.85 }}>🍛</div>
-            </div>
+            {preview
+              ? <img src={preview} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+              : <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(135deg,#3a2418,#1a1410 60%,#241a12)' }}>
+                  <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 80, opacity: 0.85 }}>🍛</div>
+                </div>}
             {state === 'analyzing' && (
               <>
                 <div style={{ position: 'absolute', inset: 0, background: `linear-gradient(${t.accent}22, transparent 40%, transparent 60%, ${t.accent}22)` }} />
@@ -207,19 +237,19 @@ function PhotoMode({ doAdd, added }) {
         <Card glow pad={16}>
           <div style={{ color: t.accent, fontSize: 11, fontWeight: 700, letterSpacing: 0.6, marginBottom: 4 }}>NUTRITION MATCH · 94% confidence</div>
           <div style={{ color: t.text, fontWeight: 800, fontSize: 18 }}>{recog.name}</div>
-          <div style={{ color: t.faint, fontSize: 13, marginBottom: 12 }}>grilled chicken · jasmine rice · avocado · salsa</div>
+          <div style={{ color: t.faint, fontSize: 13, marginBottom: 12 }}>{recog.servingG || 100}g serving · {recogPreview.priceTotal != null ? eur(recogPreview.priceTotal) : 'price n/a'} · grilled chicken · jasmine rice</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginBottom: 14 }}>
-            {[['kcal', recog.kcal, t.accent], ['Protein', recog.protein + 'g', MACROS.protein.color], ['Carbs', recog.carbs + 'g', MACROS.carbs.color], ['Fat', recog.fat + 'g', MACROS.fat.color]].map(([l, v, c]) => (
+            {[['kcal', recogPreview.kcal, t.accent], ['Protein', recogPreview.protein + 'g', MACROS.protein.color], ['Carbs', recogPreview.carbs + 'g', MACROS.carbs.color], ['Fat', recogPreview.fat + 'g', MACROS.fat.color]].map(([l, v, c]) => (
               <div key={l} style={{ background: t.elev, borderRadius: 12, padding: '10px 8px', textAlign: 'center' }}>
                 <div style={{ color: c, fontWeight: 800, fontSize: 16, fontFamily: 'var(--display)' }}>{v}</div>
                 <div style={{ color: t.faint, fontSize: 10, fontWeight: 600 }}>{l}</div>
               </div>
             ))}
           </div>
-          <Btn full icon={added[recog.id] ? 'check' : 'plus'} onClick={() => doAdd(recog)}>{added[recog.id] ? 'Added to log' : 'Add to log'}</Btn>
+          <Btn full icon={added[recog.id] ? 'check' : 'plus'} onClick={() => requestAdd(recog)}>{added[recog.id] ? 'Added to log' : 'Add to log'}</Btn>
         </Card>
       )}
-      {state === 'empty' && <Btn full variant="ghost" icon="camera" onClick={start}>Open camera</Btn>}
+      {state === 'empty' && <Btn full variant="ghost" icon="camera" onClick={() => inputRef.current && inputRef.current.click()}>Open phone camera</Btn>}
     </div>
   );
 }

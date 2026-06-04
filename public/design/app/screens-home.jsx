@@ -2,19 +2,22 @@
 
 function TopBar({ left, title, go, showProfile = true, extra }) {
   const t = useTheme();
+  const [profile] = React.useState(() => {
+    try { return JSON.parse(localStorage.getItem('tf-design-profile') || 'null') || {}; }
+    catch { return {}; }
+  });
+  const initial = (profile.name || 'A').trim().charAt(0).toUpperCase();
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <LogoBadge size={34} radius={11} />
-        {title ? <div style={{ color: t.text, fontWeight: 700, fontSize: 19 }}>{title}</div>
-               : <div style={{ color: t.muted, fontWeight: 700, fontSize: 13, letterSpacing: 0.4 }}>FoodTrack AI</div>}
-      </div>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18, background: 'transparent', border: 'none' }}>
+      <button onClick={() => go && go('home')} style={{ border: 'none', background: 'transparent', padding: 0, display: 'flex', alignItems: 'center', gap: 10, color: t.text, fontFamily: 'inherit' }}>
+        {left || <LogoBadge size={34} radius={11} />}
+        <span style={{ color: t.text, fontWeight: 800, fontSize: title ? 18 : 14 }}>{title || 'FoodTrack AI'}</span>
+      </button>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         {extra}
-        <button onClick={() => go('insights')} style={iconBtn(t)}><Icon name="chart" size={19} color={t.muted} stroke={2.2} /></button>
         {showProfile && (
-          <button onClick={() => go('profile')} style={{ ...iconBtn(t), padding: 0, overflow: 'hidden', background: 'linear-gradient(135deg,#dfeee3,#b9d6c4)' }}>
-            <span style={{ fontWeight: 800, color: '#0A0E16', fontSize: 14 }}>A</span>
+          <button onClick={() => go && go('profile')} aria-label="Open profile" style={{ border: 'none', background: 'transparent', padding: 0, color: t.text, display: 'flex', alignItems: 'center', gap: 7, fontFamily: 'inherit' }}>
+            <span style={{ width: 34, height: 34, borderRadius: 99, background: 'linear-gradient(135deg,#dfeee3,#a9cdb9)', color: '#0A0E16', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900 }}>{initial}</span>
           </button>
         )}
       </div>
@@ -24,6 +27,10 @@ function TopBar({ left, title, go, showProfile = true, extra }) {
 function iconBtn(t) {
   return { width: 38, height: 38, borderRadius: 12, background: t.panel, border: `1px solid ${t.line}`,
     display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' };
+}
+
+function todayLabel() {
+  return new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
 function MacroChips({ totals }) {
@@ -71,9 +78,11 @@ function HomeScreen({ go, data, openAdd }) {
 
   return (
     <div>
-      <TopBar go={go} />
-      <Eyebrow>Today · Thu, May 29</Eyebrow>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 4, marginBottom: 16 }}>
+      <TopBar go={go} title="Today" />
+      <div className="motion-soft-rise">
+        <Eyebrow>Today · {todayLabel()}</Eyebrow>
+      </div>
+      <div className="motion-soft-rise" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 4, marginBottom: 16, animationDelay: '.03s' }}>
         <h1 style={{ margin: 0, color: t.text, fontSize: 30, fontWeight: 800, letterSpacing: -0.5 }}>Control room</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: t.panel, border: `1px solid ${t.line}`,
           borderRadius: 999, padding: '6px 11px' }}>
@@ -84,7 +93,7 @@ function HomeScreen({ go, data, openAdd }) {
       </div>
 
       {/* Hero ring — Sauge forest feature card */}
-      <div style={{ background: t.feature, borderRadius: 28, padding: 22, marginBottom: 14, position: 'relative', overflow: 'hidden',
+      <div className="motion-soft-rise" style={{ background: t.feature, borderRadius: 28, padding: 22, marginBottom: 14, position: 'relative', overflow: 'hidden',
         boxShadow: t.glowShadow }}>
         <div style={{ position: 'absolute', right: -34, top: -34, width: 140, height: 140, borderRadius: 99, background: 'rgba(255,255,255,0.05)' }} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 18, position: 'relative' }}>
@@ -102,11 +111,6 @@ function HomeScreen({ go, data, openAdd }) {
             <div style={{ color: t.featureMuted, fontSize: 13, marginTop: 2 }}>kcal left · goal {fmt(GOALS.kcal)}</div>
           </div>
         </div>
-        <button onClick={() => openAdd('breakfast')} style={{ marginTop: 18, width: '100%', border: 'none', cursor: 'pointer',
-          background: t.featureOn, color: t.feature, fontFamily: 'inherit', fontWeight: 800, fontSize: 15, letterSpacing: 0.2,
-          borderRadius: 999, padding: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, whiteSpace: 'nowrap' }}>
-          <Icon name="plus" size={18} stroke={2.6} /> Add food
-        </button>
       </div>
 
       {/* Macros */}
@@ -117,14 +121,14 @@ function HomeScreen({ go, data, openAdd }) {
             Insights <Icon name="arrow" size={13} stroke={2.5} />
           </button>
         </div>
-        <MacroChips totals={totals} />
+        <div className="motion-soft-rise" style={{ animationDelay: '.10s' }}><MacroChips totals={totals} /></div>
       </div>
 
       {/* Quick access */}
       <Eyebrow>Quick access</Eyebrow>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, margin: '10px 0 18px' }}>
         {quick.map((q, i) => (
-          <Card key={i} pad={15} onClick={q.go} style={{ minHeight: 104, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+          <Card key={i} className="motion-soft-rise" pad={15} onClick={q.go} style={{ minHeight: 104, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', animationDelay: `${0.13 + i * 0.035}s` }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <span style={{ color: t.muted, fontSize: 11, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase' }}>{q.eyebrow}</span>
               <span style={{ color: t.accent, display: 'flex' }}><Icon name={q.icon} size={18} stroke={2.2} /></span>
@@ -141,7 +145,7 @@ function HomeScreen({ go, data, openAdd }) {
       <Eyebrow>Logged today</Eyebrow>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
         {meals.filter(m => m.items.length).map(m => (
-          <Card key={m.id} pad={14} onClick={() => go('diary')}>
+          <Card key={m.id} className="motion-soft-rise" pad={14} onClick={() => go('diary')}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <div style={{ width: 8, height: 8, borderRadius: 99, background: m.color, boxShadow: `0 0 8px ${m.color}` }} />
               <div style={{ flex: 1 }}>
@@ -159,11 +163,17 @@ function HomeScreen({ go, data, openAdd }) {
   );
 }
 
-function DiaryScreen({ go, data, openAdd, removeFood }) {
+function DiaryScreen({ go, data, openAdd, removeFood, updateFoodAmount }) {
   const t = useTheme();
   const { totals } = data;
   const pct = Math.min(100, Math.round((totals.kcal / GOALS.kcal) * 100));
   const left = Math.max(0, GOALS.kcal - totals.kcal);
+  const [editing, setEditing] = React.useState(null);
+  const saveEditedAmount = (grams) => {
+    if (!editing) return;
+    updateFoodAmount(editing.uid, grams);
+    setEditing(null);
+  };
 
   return (
     <div>
@@ -223,8 +233,17 @@ function DiaryScreen({ go, data, openAdd, removeFood }) {
                       <div style={{ width: 32, height: 32, borderRadius: 9, background: t.elev, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 17 }}>{it.food.emoji}</div>
                       <div style={{ flex: 1 }}>
                         <div style={{ color: t.text, fontWeight: 600, fontSize: 14 }}>{it.food.name}</div>
-                        <div style={{ color: t.faint, fontSize: 12 }}>{it.food.brand} · {it.time}</div>
+                        <div style={{ color: t.faint, fontSize: 12 }}>
+                          {it.food.brand} · {it.food.quantityG ? `${it.food.quantityG}g · ` : ''}{it.food.priceTotal != null ? `${eur(it.food.priceTotal)} · ` : ''}{it.time}
+                        </div>
                       </div>
+                      <button onClick={() => setEditing(it)} aria-label={`Edit grams for ${it.food.name}`} style={{
+                        border: `1px solid ${t.line2}`, background: t.elev, color: t.accent, borderRadius: 999,
+                        padding: '7px 9px', minWidth: 56, fontSize: 12, fontWeight: 800, cursor: 'pointer',
+                        fontVariantNumeric: 'tabular-nums',
+                      }}>
+                        {it.food.quantityG || it.food.servingG || 100}g
+                      </button>
                       <div style={{ color: t.text, fontWeight: 700, fontSize: 14, fontFamily: 'var(--display)' }}>{it.food.kcal}</div>
                       <button onClick={() => removeFood(it.uid)} style={{ background: 'none', border: 'none', color: t.faint, cursor: 'pointer', display: 'flex', padding: 4 }}>
                         <Icon name="trash" size={16} />
@@ -237,6 +256,15 @@ function DiaryScreen({ go, data, openAdd, removeFood }) {
           );
         })}
       </div>
+      <PortionSheet
+        open={!!editing}
+        food={editing?.food}
+        initialGrams={editing?.food?.quantityG || editing?.food?.servingG || 100}
+        title="Edit grams"
+        confirmLabel="Save amount"
+        onConfirm={saveEditedAmount}
+        onClose={() => setEditing(null)}
+      />
     </div>
   );
 }

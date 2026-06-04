@@ -13,31 +13,89 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 }/*EDITMODE-END*/;
 
 function App() {
+  React.useEffect(() => {
+    clearLegacyDesignCache();
+  }, []);
+
   const [tw, setTweak] = useTweaks(TWEAK_DEFAULTS);
-  const data = useAppData();
   const [route, setRoute] = React.useState({ screen: 'home', params: {} });
-  const [entered, setEntered] = React.useState(false);
+  const [entered, setEntered] = React.useState(() => localStorage.getItem('tf-design-session') === 'active');
+  const [authMode, setAuthMode] = React.useState('signup');
+  const [authForm, setAuthForm] = React.useState({ name: 'Alex Rivera', email: 'alex.rivera@gmail.com', password: '', weightKg: '72', heightCm: '178', diet: 'balanced' });
+  const [profile, setProfile] = React.useState(() => {
+    try { return JSON.parse(localStorage.getItem('tf-design-profile') || 'null') || { name: 'Alex Rivera', email: 'alex.rivera@gmail.com' }; }
+    catch { return { name: 'Alex Rivera', email: 'alex.rivera@gmail.com' }; }
+  });
   const [toast, setToast] = React.useState(null);
+  const [fabPulse, setFabPulse] = React.useState(false);
+  const data = useAppData(entered ? profile.email : 'guest');
 
   const theme = React.useMemo(() => makeTheme(tw.accent), [tw.accent]);
-  GOALS.kcal = tw.kcalGoal; // live goal
+  GOALS.kcal = profile.calorieGoal || tw.kcalGoal; // live goal
 
   const go = (screen, params = {}) => setRoute({ screen, params });
   const openAdd = (mealId, mode = 'search') => go('add', { mealId, mode });
+  const triggerAdd = (mealId, mode = 'search') => {
+    setFabPulse(true);
+    clearTimeout(triggerAdd._t);
+    triggerAdd._t = setTimeout(() => setFabPulse(false), 360);
+    openAdd(mealId, mode);
+  };
   const notify = (msg) => { setToast(msg); clearTimeout(notify._t); notify._t = setTimeout(() => setToast(null), 2200); };
   const openTweaks = () => window.postMessage({ type: '__activate_edit_mode' }, '*');
+  const clearDeviceSession = () => {
+    localStorage.removeItem('tf-design-session');
+    localStorage.removeItem('tf-design-profile');
+    localStorage.removeItem('tf-auth-token');
+    localStorage.removeItem('trackfoodai-token');
+    sessionStorage.removeItem('tf-design-session');
+    if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister())).catch(() => {});
+    if ('caches' in window) caches.keys().then(keys => keys.forEach(k => caches.delete(k))).catch(() => {});
+  };
+  const submitAuth = async (event) => {
+    event.preventDefault();
+    if (!authForm.email.trim() || !authForm.password.trim()) {
+      notify(authMode === 'signup' ? 'Add email and password' : 'Enter email and password');
+      return;
+    }
+    const nextProfile = {
+      name: authMode === 'signup' ? (authForm.name.trim() || 'Alex Rivera') : (profile.name || 'Alex Rivera'),
+      email: authForm.email.trim() || profile.email || 'alex.rivera@gmail.com',
+      weightKg: authMode === 'signup' ? Number(authForm.weightKg) || 72 : profile.weightKg,
+      heightCm: authMode === 'signup' ? Number(authForm.heightCm) || 178 : profile.heightCm,
+      diet: authMode === 'signup' ? authForm.diet : profile.diet,
+    };
+    if (authMode === 'signup') nextProfile.calorieGoal = estimateGoal(nextProfile);
+    const remoteProfile = await syncBackendAuth(authMode, authForm, nextProfile).catch(() => null);
+    const finalProfile = remoteProfile || nextProfile;
+    if (authMode === 'signup') clearAccountData(finalProfile.email);
+    setProfile(finalProfile);
+    localStorage.setItem('tf-design-session', 'active');
+    localStorage.setItem('tf-design-profile', JSON.stringify(finalProfile));
+    setEntered(true);
+    setRoute({ screen: 'home', params: {} });
+    notify(authMode === 'signup' ? 'Account created' : 'Welcome back');
+  };
+  const logout = () => {
+    clearDeviceSession();
+    setEntered(false);
+    setAuthMode('login');
+    setAuthForm(current => ({ ...current, password: '' }));
+    setRoute({ screen: 'home', params: {} });
+    notify('Signed out on this device');
+  };
 
   const dispFont = FONTS[tw.displayFont] || FONTS.Grotesk;
   const rootStyle = { '--display': dispFont, fontFamily: "'Manrope', sans-serif" };
 
   const screens = {
-    home:     <HomeScreen go={go} data={data} openAdd={openAdd} />,
-    diary:    <DiaryScreen go={go} data={data} openAdd={openAdd} removeFood={data.removeFood} />,
+    home:     <HomeScreen go={go} data={data} openAdd={openAdd} profile={profile} />,
+    diary:    <DiaryScreen go={go} data={data} openAdd={openAdd} removeFood={data.removeFood} updateFoodAmount={data.updateFoodAmount} />,
     add:      <AddScreen go={go} data={data} addFood={data.addFood} notify={notify} initial={route.params} />,
     plan:     <PlanScreen go={go} data={data} />,
-    coach:    <CoachScreen go={go} data={data} addFood={data.addFood} addPlan={data.addPlan} notify={notify} />,
+    coach:    <CoachScreen go={go} data={data} profile={profile} addFood={data.addFood} addPlan={data.addPlan} notify={notify} />,
     insights: <InsightsScreen go={go} data={data} />,
-    profile:  <ProfileScreen go={go} data={data} openTweaks={openTweaks} onLogout={() => setEntered(false)} notify={notify} />,
+    profile:  <ProfileScreen go={go} data={data} profile={profile} openTweaks={openTweaks} onLogout={logout} notify={notify} />,
   };
 
   const nav = [
@@ -52,7 +110,14 @@ function App() {
     <ThemeCtx.Provider value={theme}>
       <div style={{ ...rootStyle, position: 'fixed', inset: 0, width: '100%', height: '100%', background: theme.bg, color: theme.text, overflow: 'hidden' }}>
         {!entered ? (
-          <Welcome onStart={() => setEntered(true)} theme={theme} />
+          <Welcome
+            theme={theme}
+            authMode={authMode}
+            setAuthMode={setAuthMode}
+            authForm={authForm}
+            setAuthForm={setAuthForm}
+            onSubmit={submitAuth}
+          />
         ) : (
           <>
             <Screen routeKey={route.screen} motion={tw.motion} isCoach={route.screen === 'coach'}>
@@ -60,9 +125,8 @@ function App() {
                 ? <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', height: 'calc(100% )' }}>{screens.coach}</div>
                 : screens[route.screen]}
             </Screen>
-
             {/* bottom nav */}
-            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 40, paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+            <div style={{ position: 'absolute', left: 0, right: 0, bottom: -12, zIndex: 40, paddingBottom: 'calc(12px + env(safe-area-inset-bottom, 0px))',
               background: `linear-gradient(to top, ${theme.bg} 58%, transparent)`, pointerEvents: 'none' }}>
               <div style={{ margin: '0 16px', height: 62, borderRadius: 22, background: theme.panel2, border: `1px solid ${theme.line}`,
                 boxShadow: '0 10px 30px rgba(80,70,40,0.14)', display: 'flex', alignItems: 'center', justifyContent: 'space-around',
@@ -71,12 +135,19 @@ function App() {
                   if (n.fab) {
                     const on = route.screen === 'add';
                     return (
-                      <button key={n.id} onClick={() => openAdd(route.params.mealId || 'breakfast')} style={{
+                      <button key={n.id} onClick={() => triggerAdd(route.params.mealId || 'breakfast')} style={{
                         width: 54, height: 54, borderRadius: 18, border: 'none', cursor: 'pointer', marginTop: -22,
                         background: theme.accent, color: theme.accentOn, display: 'flex', alignItems: 'center', justifyContent: 'center',
                         boxShadow: `0 8px 24px ${theme.accentGlow}, 0 0 0 5px ${theme.bg}`,
-                        transform: on ? 'scale(1.06) rotate(45deg)' : 'scale(1)', transition: 'transform .35s cubic-bezier(.22,1,.3,1)' }}>
-                        <Icon name="plus" size={26} stroke={2.6} />
+                        transform: fabPulse ? 'translateY(-2px) scale(1.08)' : on ? 'scale(1.04)' : 'scale(1)',
+                        transition: 'transform .32s cubic-bezier(.22,1,.3,1)' }}>
+                        <span style={{
+                          display: 'flex',
+                          transform: fabPulse ? 'rotate(90deg)' : 'rotate(0deg)',
+                          transition: 'transform .32s cubic-bezier(.22,1,.3,1)',
+                        }}>
+                          <Icon name="plus" size={26} stroke={2.6} />
+                        </span>
                       </button>
                     );
                   }
@@ -96,6 +167,7 @@ function App() {
             <Toast toast={toast} />
           </>
         )}
+        {!entered && <Toast toast={toast} />}
         {entered && <AppTweaks tw={tw} setTweak={setTweak} />}
       </div>
     </ThemeCtx.Provider>
@@ -114,18 +186,18 @@ function Screen({ children, routeKey, motion, isCoach }) {
   return (
     <div key={routeKey} style={{
       position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden',
-      padding: 'env(safe-area-inset-top, 0px) calc(18px + env(safe-area-inset-right, 0px)) calc(110px + env(safe-area-inset-bottom, 0px)) calc(18px + env(safe-area-inset-left, 0px))',
+      padding: 'calc(18px + env(safe-area-inset-top, 0px)) calc(18px + env(safe-area-inset-right, 0px)) calc(110px + env(safe-area-inset-bottom, 0px)) calc(18px + env(safe-area-inset-left, 0px))',
       display: isCoach ? 'flex' : 'block', flexDirection: 'column',
       opacity: 1,
-      transform: shown ? 'none' : 'translateX(16px)',
-      transition: motion ? 'transform .42s cubic-bezier(.22,1,.3,1)' : 'none',
+      transform: shown ? 'none' : 'translateY(14px) scale(.985)',
+      transition: motion ? 'transform .48s cubic-bezier(.22,1,.3,1)' : 'none',
     }}>
       {children}
     </div>
   );
 }
 
-function Welcome({ onStart, theme }) {
+function Welcome({ theme, authMode, setAuthMode, authForm, setAuthForm, onSubmit }) {
   const pct = 51;
   const macros = [{ k: 'protein', v: 94, g: 150 }, { k: 'carbs', v: 132, g: 250 }, { k: 'fat', v: 37, g: 72 }];
   const features = [
@@ -209,13 +281,108 @@ function Welcome({ onStart, theme }) {
         </div>
       </div>
 
+      <form id="tf-auth-form" onSubmit={onSubmit} style={{ background: 'rgba(245,241,231,.72)', border: `1px solid ${theme.line}`, borderRadius: 22, padding: 14, marginTop: 18, boxShadow: theme.cardShadow, flexShrink: 0 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, background: theme.elev, borderRadius: 999, padding: 4, marginBottom: 12 }}>
+          {['signup','login'].map(mode => (
+            <button key={mode} type="button" onClick={() => setAuthMode(mode)} style={{ border: 'none', borderRadius: 999, padding: '10px 8px', background: authMode === mode ? theme.accent : 'transparent', color: authMode === mode ? theme.accentOn : theme.muted, fontWeight: 800 }}>
+              {mode === 'signup' ? 'Sign up' : 'Log in'}
+            </button>
+          ))}
+        </div>
+        {authMode === 'signup' && (
+          <>
+            <input value={authForm.name} onChange={e => setAuthForm(f => ({ ...f, name: e.target.value }))} placeholder="Name" style={authInput(theme)} />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <input value={authForm.weightKg} onChange={e => setAuthForm(f => ({ ...f, weightKg: e.target.value }))} placeholder="Weight kg" inputMode="decimal" style={authInput(theme)} />
+              <input value={authForm.heightCm} onChange={e => setAuthForm(f => ({ ...f, heightCm: e.target.value }))} placeholder="Height cm" inputMode="decimal" style={authInput(theme)} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 6, marginBottom: 10 }}>
+              {[
+                ['balanced', 'Balance'],
+                ['cut', 'Cut'],
+                ['muscle', 'Muscle'],
+              ].map(([id, label]) => (
+                <button key={id} type="button" onClick={() => setAuthForm(f => ({ ...f, diet: id }))} style={{ border: `1px solid ${authForm.diet === id ? theme.accent : theme.line2}`, borderRadius: 999, padding: '9px 6px', background: authForm.diet === id ? `${theme.accent}18` : theme.panel, color: authForm.diet === id ? theme.accent : theme.muted, fontWeight: 800, fontSize: 12 }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+        <input value={authForm.email} onChange={e => setAuthForm(f => ({ ...f, email: e.target.value }))} placeholder="Email" inputMode="email" style={authInput(theme)} />
+        <input value={authForm.password} onChange={e => setAuthForm(f => ({ ...f, password: e.target.value }))} placeholder="Password" type="password" style={authInput(theme)} />
+        <Btn type="submit" full icon="arrow" style={{ marginTop: 4 }}>{authMode === 'signup' ? 'Create account' : 'Log in'}</Btn>
+      </form>
+
       {/* CTAs pinned to bottom */}
       <div style={{ marginTop: 'auto', paddingTop: 18, flexShrink: 0 }}>
-        <Btn full onClick={onStart} icon="arrow" style={{ marginBottom: 10 }}>Get started</Btn>
-        <button onClick={onStart} style={{ width: '100%', background: 'none', border: 'none', color: theme.muted, fontWeight: 600, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}>Explore the demo →</button>
+        <button type="button" onClick={() => {
+          setAuthMode('signup');
+          setAuthForm({ name: 'Alex Rivera', email: 'alex.rivera@gmail.com', password: 'demo-device-pass', weightKg: '72', heightCm: '178', diet: 'balanced' });
+        }} style={{ width: '100%', background: 'none', border: 'none', color: theme.muted, fontWeight: 600, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}>Fill demo credentials →</button>
       </div>
     </div>
   );
+}
+
+function estimateGoal(profile) {
+  const weight = Number(profile.weightKg) || 72;
+  const height = Number(profile.heightCm) || 178;
+  const base = 10 * weight + 6.25 * height - 5 * 30 + 5;
+  const balanced = Math.round(base * 1.45);
+  if (profile.diet === 'cut') return Math.max(1200, Math.round(balanced - 350));
+  if (profile.diet === 'muscle') return Math.round(balanced + 280);
+  return balanced;
+}
+
+function clearAccountData(email) {
+  const account = accountStorageId(email);
+  ['log', 'plans', 'coach', 'coach-v2'].forEach(area => localStorage.removeItem(accountStorageKey(account, area)));
+}
+
+function clearLegacyDesignCache() {
+  ['tf-design-log', 'tf-design-plans', 'tf-design-coach', 'tf-design-coach-v2'].forEach(key => localStorage.removeItem(key));
+}
+
+async function syncBackendAuth(mode, form, profile) {
+  const base = `${window.location.protocol}//${window.location.hostname || '127.0.0.1'}:8000`;
+  const path = mode === 'signup' ? '/api/v1/auth/register' : '/api/v1/auth/login';
+  const payload = mode === 'signup'
+    ? {
+        name: profile.name,
+        email: profile.email,
+        password: form.password,
+        calorie_goal: profile.calorieGoal,
+        activity_level: 'balanced',
+        weight_kg: profile.weightKg,
+        height_cm: profile.heightCm,
+        diet_type: profile.diet,
+      }
+    : { email: profile.email, password: form.password };
+  const response = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) return null;
+  const data = await response.json();
+  localStorage.setItem('tf-auth-token', data.token);
+  return {
+    ...profile,
+    name: data.profile.name,
+    email: data.profile.email,
+    weightKg: data.profile.weight_kg || profile.weightKg,
+    heightCm: data.profile.height_cm || profile.heightCm,
+    diet: data.profile.diet_type || profile.diet,
+    calorieGoal: data.profile.calorie_goal || profile.calorieGoal,
+  };
+}
+
+function authInput(theme) {
+  return {
+    width: '100%', border: `1px solid ${theme.line2}`, background: theme.panel, color: theme.text,
+    borderRadius: 14, padding: '12px 13px', marginBottom: 8, outline: 'none', fontSize: 14, fontWeight: 650,
+  };
 }
 
 function AppTweaks({ tw, setTweak }) {

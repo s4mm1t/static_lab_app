@@ -32,20 +32,20 @@ const GOALS = { kcal: 2400, protein: 150, carbs: 250, fat: 72, fiber: 30 };
 
 // ── Food database (per serving) ───────────────────────────────────────
 const FOOD_DB = [
-  { id: 'f1',  name: 'Greek yogurt bowl', brand: 'Homemade',  kcal: 320, protein: 24, carbs: 38, fat: 8,  fiber: 5,  emoji: '🥣', tags: ['breakfast'] },
-  { id: 'f2',  name: 'Cold brew + oat',   brand: 'Café',      kcal: 90,  protein: 2,  carbs: 14, fat: 3,  fiber: 0,  emoji: '☕', tags: ['drink'] },
-  { id: 'f3',  name: 'Chicken rice bowl', brand: 'Meal prep', kcal: 612, protein: 48, carbs: 62, fat: 19, fiber: 8,  emoji: '🍗', tags: ['lunch'] },
-  { id: 'f4',  name: 'Protein bar',       brand: 'Barebells',  kcal: 210, protein: 20, carbs: 18, fat: 7,  fiber: 4,  emoji: '🍫', tags: ['snack'] },
-  { id: 'f5',  name: 'Banana',            brand: 'Fresh',     kcal: 105, protein: 1,  carbs: 27, fat: 0,  fiber: 3,  emoji: '🍌', tags: ['fruit'] },
-  { id: 'f6',  name: 'Atún claro',        brand: 'Masymas',   kcal: 116, protein: 26, carbs: 0,  fat: 1,  fiber: 0,  emoji: '🐟', tags: ['protein'] },
-  { id: 'f7',  name: 'Avocado toast',     brand: 'Homemade',  kcal: 290, protein: 9,  carbs: 30, fat: 16, fiber: 9,  emoji: '🥑', tags: ['breakfast'] },
-  { id: 'f8',  name: 'Salmon fillet',     brand: 'Carrefour', kcal: 367, protein: 40, carbs: 0,  fat: 23, fiber: 0,  emoji: '🍣', tags: ['dinner'] },
-  { id: 'f9',  name: 'Mixed salad',       brand: 'Fresh',     kcal: 140, protein: 4,  carbs: 12, fat: 9,  fiber: 6,  emoji: '🥗', tags: ['side'] },
-  { id: 'f10', name: 'Espresso',          brand: 'Café',      kcal: 5,   protein: 0,  carbs: 1,  fat: 0,  fiber: 0,  emoji: '☕', tags: ['drink'] },
-  { id: 'f11', name: 'Almonds 30g',       brand: 'Eroski',    kcal: 174, protein: 6,  carbs: 6,  fat: 15, fiber: 4,  emoji: '🌰', tags: ['snack'] },
-  { id: 'f12', name: 'Whey shake',        brand: 'MyProtein', kcal: 130, protein: 27, carbs: 4,  fat: 2,  fiber: 1,  emoji: '🥤', tags: ['protein'] },
-  { id: 'f13', name: 'Oatmeal + berries', brand: 'Homemade',  kcal: 280, protein: 10, carbs: 48, fat: 6,  fiber: 8,  emoji: '🫐', tags: ['breakfast'] },
-  { id: 'f14', name: 'Pasta bolognese',   brand: 'Homemade',  kcal: 540, protein: 28, carbs: 68, fat: 16, fiber: 6,  emoji: '🍝', tags: ['dinner'] },
+  { id: 'f1',  name: 'Greek yogurt bowl', brand: 'Homemade',  kcal: 320, protein: 24, carbs: 38, fat: 8,  fiber: 5,  emoji: '🥣', tags: ['breakfast'], servingG: 260, price: 1.85 },
+  { id: 'f2',  name: 'Cold brew + oat',   brand: 'Café',      kcal: 90,  protein: 2,  carbs: 14, fat: 3,  fiber: 0,  emoji: '☕', tags: ['drink'], servingG: 250, price: 1.60 },
+  { id: 'f3',  name: 'Chicken rice bowl', brand: 'Meal prep', kcal: 612, protein: 48, carbs: 62, fat: 19, fiber: 8,  emoji: '🍗', tags: ['lunch'], servingG: 420, price: 4.90 },
+  { id: 'f4',  name: 'Protein bar',       brand: 'Barebells',  kcal: 210, protein: 20, carbs: 18, fat: 7,  fiber: 4,  emoji: '🍫', tags: ['snack'], servingG: 55, price: 2.35 },
+  { id: 'f5',  name: 'Banana',            brand: 'Fresh',     kcal: 105, protein: 1,  carbs: 27, fat: 0,  fiber: 3,  emoji: '🍌', tags: ['fruit'], servingG: 118, price: 0.32 },
+  { id: 'f6',  name: 'Atún claro',        brand: 'Masymas',   kcal: 116, protein: 26, carbs: 0,  fat: 1,  fiber: 0,  emoji: '🐟', tags: ['protein'], servingG: 80, price: 1.29 },
+  { id: 'f7',  name: 'Avocado toast',     brand: 'Homemade',  kcal: 290, protein: 9,  carbs: 30, fat: 16, fiber: 9,  emoji: '🥑', tags: ['breakfast'], servingG: 180, price: 2.10 },
+  { id: 'f8',  name: 'Salmon fillet',     brand: 'Carrefour', kcal: 367, protein: 40, carbs: 0,  fat: 23, fiber: 0,  emoji: '🍣', tags: ['dinner'], servingG: 170, price: 5.75 },
+  { id: 'f9',  name: 'Mixed salad',       brand: 'Fresh',     kcal: 140, protein: 4,  carbs: 12, fat: 9,  fiber: 6,  emoji: '🥗', tags: ['side'], servingG: 240, price: 2.45 },
+  { id: 'f10', name: 'Espresso',          brand: 'Café',      kcal: 5,   protein: 0,  carbs: 1,  fat: 0,  fiber: 0,  emoji: '☕', tags: ['drink'], servingG: 40, price: 1.10 },
+  { id: 'f11', name: 'Almonds 30g',       brand: 'Eroski',    kcal: 174, protein: 6,  carbs: 6,  fat: 15, fiber: 4,  emoji: '🌰', tags: ['snack'], servingG: 30, price: 0.78 },
+  { id: 'f12', name: 'Whey shake',        brand: 'MyProtein', kcal: 130, protein: 27, carbs: 4,  fat: 2,  fiber: 1,  emoji: '🥤', tags: ['protein'], servingG: 35, price: 0.95 },
+  { id: 'f13', name: 'Oatmeal + berries', brand: 'Homemade',  kcal: 280, protein: 10, carbs: 48, fat: 6,  fiber: 8,  emoji: '🫐', tags: ['breakfast'], servingG: 300, price: 1.65 },
+  { id: 'f14', name: 'Pasta bolognese',   brand: 'Homemade',  kcal: 540, protein: 28, carbs: 68, fat: 16, fiber: 6,  emoji: '🍝', tags: ['dinner'], servingG: 380, price: 3.80 },
 ];
 
 // seeded "today" so the app looks lived-in
@@ -69,23 +69,83 @@ function totalsFromLog(log) {
 }
 
 function fmt(n) { return Math.round(n).toLocaleString('en-US'); }
+function eur(n) { return `${Number(n || 0).toFixed(2)} EUR`; }
+function scaleFoodPortion(food, grams) {
+  const servingG = food.servingG || 100;
+  const quantityG = Math.max(5, Number(grams) || servingG);
+  const ratio = quantityG / servingG;
+  const round = (value) => Math.max(0, Math.round(value * ratio));
+  return {
+    ...food,
+    baseId: food.baseId || food.id,
+    quantityG,
+    servingG,
+    priceTotal: food.price != null ? Number((food.price * ratio).toFixed(2)) : null,
+    kcal: round(food.kcal),
+    protein: round(food.protein),
+    carbs: round(food.carbs),
+    fat: round(food.fat),
+    fiber: round(food.fiber),
+  };
+}
 
-// ── App data store (lifted state) ─────────────────────────────────────
-function useAppData() {
-  const [log, setLog] = React.useState(() =>
-    SEED_LOG.map(s => ({ ...s, food: { ...byId(s.ref) } }))
-  );
-  const [plans, setPlans] = React.useState([
-    { id: 'p1', date: dateKey(0), type: 'Training', title: 'Leg day · 18:30', time: '18:30' },
-    { id: 'p2', date: dateKey(0), type: 'Meal', title: 'Meal prep — salmon + rice', time: '20:00' },
-  ]);
-  const addFood = (food, mealId) => {
-    setLog(l => [...l, { uid: 'u' + Date.now() + Math.random().toString(36).slice(2,6), food: { ...food }, mealId, time: nowTime() }]);
+function accountStorageId(accountId) {
+  return String(accountId || 'guest').trim().toLowerCase().replace(/[^a-z0-9@._-]+/g, '-') || 'guest';
+}
+function accountStorageKey(accountId, area) {
+  return `tf-design-${area}:${accountStorageId(accountId)}`;
+}
+function storedJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function hydrateLog(rows) {
+  return (rows || []).map(item => {
+    const food = item.food || byId(item.ref);
+    return food ? { ...item, food: { ...food } } : null;
+  }).filter(Boolean);
+}
+
+// ── App data store (lifted state, isolated per account) ───────────────
+function useAppData(accountId = 'guest') {
+  const dataKey = accountStorageId(accountId);
+  const loadLog = React.useCallback(() => hydrateLog(storedJSON(accountStorageKey(dataKey, 'log'), [])), [dataKey]);
+  const loadPlans = React.useCallback(() => storedJSON(accountStorageKey(dataKey, 'plans'), []), [dataKey]);
+  const [log, setLog] = React.useState(loadLog);
+  const [plans, setPlans] = React.useState(loadPlans);
+
+  React.useEffect(() => {
+    setLog(loadLog());
+    setPlans(loadPlans());
+  }, [loadLog, loadPlans]);
+
+  React.useEffect(() => {
+    localStorage.setItem(accountStorageKey(dataKey, 'log'), JSON.stringify(log));
+  }, [dataKey, log]);
+
+  React.useEffect(() => {
+    localStorage.setItem(accountStorageKey(dataKey, 'plans'), JSON.stringify(plans));
+  }, [dataKey, plans]);
+
+  const addFood = (food, mealId, amountG) => {
+    const prepared = amountG ? scaleFoodPortion(food, amountG) : { ...food };
+    setLog(l => [...l, { uid: 'u' + Date.now() + Math.random().toString(36).slice(2,6), food: prepared, mealId, time: nowTime() }]);
+  };
+  const updateFoodAmount = (uid, amountG) => {
+    setLog(l => l.map(item => {
+      if (item.uid !== uid) return item;
+      const source = byId(item.food?.baseId || item.food?.id || item.ref) || item.food;
+      return { ...item, food: scaleFoodPortion(source, amountG) };
+    }));
   };
   const removeFood = (uid) => setLog(l => l.filter(i => i.uid !== uid));
   const addPlan = (p) => setPlans(ps => [...ps, { ...p, id: 'p' + Date.now() }]);
   const totals = totalsFromLog(log);
-  return { log, totals, addFood, removeFood, plans, addPlan };
+  return { log, totals, addFood, updateFoodAmount, removeFood, plans, addPlan };
 }
 
 function nowTime() {
@@ -93,7 +153,8 @@ function nowTime() {
   return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
 function dateKey(offset = 0) {
-  const d = new Date(2026, 4, 29 + offset);
+  const d = new Date();
+  d.setDate(d.getDate() + offset);
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
@@ -127,5 +188,5 @@ const useTheme = () => React.useContext(ThemeCtx);
 
 Object.assign(window, {
   PALETTES, MACROS, MEALS, FOOD_DB, SEED_LOG, GOALS,
-  ThemeCtx, useTheme, makeTheme, fmt, totalsFromLog, useAppData, dateKey,
+  ThemeCtx, useTheme, makeTheme, fmt, eur, scaleFoodPortion, totalsFromLog, useAppData, dateKey, storedJSON, accountStorageKey, accountStorageId,
 });
