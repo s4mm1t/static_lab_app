@@ -140,7 +140,7 @@ function App() {
                 : screens[route.screen]}
             </Screen>
             {/* bottom nav */}
-            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 40, paddingBottom: 'max(4px, env(safe-area-inset-bottom, 0px))',
+            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 40, paddingBottom: 0,
               background: `linear-gradient(to top, ${theme.bg} 58%, transparent)`, pointerEvents: 'none' }}>
               <div style={{ margin: '0 16px', height: 58, borderRadius: 20, background: theme.panel2, border: `1px solid ${theme.line}`,
                 boxShadow: '0 10px 30px rgba(80,70,40,0.14)', display: 'flex', alignItems: 'center', justifyContent: 'space-around',
@@ -200,7 +200,7 @@ function Screen({ children, routeKey, motion, isCoach }) {
   return (
     <div key={routeKey} style={{
       position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden',
-      padding: 'calc(8px + env(safe-area-inset-top, 0px)) calc(18px + env(safe-area-inset-right, 0px)) calc(88px + env(safe-area-inset-bottom, 0px)) calc(18px + env(safe-area-inset-left, 0px))',
+      padding: 'max(6px, calc(env(safe-area-inset-top, 0px) - 18px)) calc(18px + env(safe-area-inset-right, 0px)) 82px calc(18px + env(safe-area-inset-left, 0px))',
       display: isCoach ? 'flex' : 'block', flexDirection: 'column',
       opacity: 1,
       transform: shown ? 'none' : 'translateY(14px) scale(.985)',
@@ -221,7 +221,7 @@ function Welcome({ theme, authMode, setAuthMode, authForm, setAuthForm, authBusy
   ];
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box',
-      padding: 'calc(14px + env(safe-area-inset-top, 0px)) calc(24px + env(safe-area-inset-right, 0px)) calc(18px + env(safe-area-inset-bottom, 0px)) calc(24px + env(safe-area-inset-left, 0px))',
+      padding: 'max(8px, calc(env(safe-area-inset-top, 0px) - 20px)) calc(24px + env(safe-area-inset-right, 0px)) 16px calc(24px + env(safe-area-inset-left, 0px))',
       overflowY: 'auto',
       background: `radial-gradient(130% 65% at 100% 0%, ${theme.accentGlow} 0%, transparent 52%), ${theme.bg}` }}>
       {/* header */}
