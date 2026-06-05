@@ -545,21 +545,39 @@ async function apiRequest<T>(
 }
 
 function getApiBase() {
-  const configured = process.env.NEXT_PUBLIC_API_URL;
+  const configured = process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, "");
+  const isLocalHost = (hostname: string) =>
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "0.0.0.0" ||
+    hostname.endsWith(".local") ||
+    /^10\./.test(hostname) ||
+    /^192\.168\./.test(hostname) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(hostname);
+
+  if (configured) {
+    try {
+      const configuredUrl = new URL(configured);
+      if (!isLocalHost(configuredUrl.hostname)) {
+        return configured;
+      }
+    } catch {
+      if (!configured.includes("localhost") && !configured.includes("127.0.0.1")) {
+        return configured;
+      }
+    }
+  }
+
   if (typeof window === "undefined") {
     return configured ?? "http://127.0.0.1:8000";
   }
 
   const { protocol, hostname } = window.location;
-  if (
-    configured &&
-    !configured.includes("localhost") &&
-    !configured.includes("127.0.0.1")
-  ) {
-    return configured;
+  if (!isLocalHost(hostname)) {
+    return window.location.origin;
   }
 
-  return `${protocol}//${hostname}:8000`;
+  return configured ?? `${protocol}//${hostname || "127.0.0.1"}:8000`;
 }
 
 function readStoredProfile() {

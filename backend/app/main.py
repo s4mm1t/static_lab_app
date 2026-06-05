@@ -42,10 +42,12 @@ AssistantRole = Literal["user", "assistant"]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://trackfoodai:trackfoodai@localhost:5432/trackfoodai",
+DEFAULT_DATABASE_URL = (
+    "memory://trackfoodai"
+    if os.getenv("VERCEL") and not os.getenv("DATABASE_URL")
+    else "postgresql://trackfoodai:trackfoodai@localhost:5432/trackfoodai"
 )
+DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
 PLANNER_DATABASE_URL = os.getenv("PLANNER_DATABASE_URL", DATABASE_URL)
 ASSISTANT_DATABASE_URL = os.getenv("ASSISTANT_DATABASE_URL", DATABASE_URL)
 EXTERNAL_PRODUCTS_SQLITE = os.getenv("EXTERNAL_PRODUCTS_SQLITE", "")
@@ -66,6 +68,18 @@ INTRUDER_BLOCK_THRESHOLD = 5
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 AGENT_INSTRUCTIONS_PATH = Path(os.getenv("AGENT_INSTRUCTIONS_PATH", str(PROJECT_ROOT / "AGENTS.md")))
+DEFAULT_ALLOWED_HOSTS = "localhost,127.0.0.1,testserver,backend,frontend,*.orb.local,*.vercel.app"
+if os.getenv("VERCEL_URL"):
+    DEFAULT_ALLOWED_HOSTS = f"{DEFAULT_ALLOWED_HOSTS},{os.getenv('VERCEL_URL')}"
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:3000,http://127.0.0.1:3000,"
+    "http://localhost:3001,http://127.0.0.1:3001"
+)
+if os.getenv("VERCEL_URL"):
+    DEFAULT_CORS_ORIGINS = f"{DEFAULT_CORS_ORIGINS},https://{os.getenv('VERCEL_URL')}"
+DEFAULT_CORS_ORIGIN_REGEX = (
+    r"https?://((localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3})(:\d+)?|.*\.vercel\.app)"
+)
 ADMIN_EMAILS = {
     email.strip().lower()
     for email in os.getenv("TRACKFOODAI_ADMIN_EMAILS", "").split(",")
@@ -955,14 +969,15 @@ def init_storage_with_retries() -> None:
         init_assistant_storage()
         return
 
-    for attempt in range(1, 31):
+    max_attempts = 3 if os.getenv("VERCEL") else 30
+    for attempt in range(1, max_attempts + 1):
         try:
             init_storage()
             init_planner_storage()
             init_assistant_storage()
             return
         except psycopg.OperationalError:
-            if attempt == 30:
+            if attempt == max_attempts:
                 raise
             time.sleep(1)
 
@@ -3446,10 +3461,7 @@ app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=[
         host.strip()
-        for host in os.getenv(
-            "ALLOWED_HOSTS",
-            "localhost,127.0.0.1,testserver,backend,frontend,*.orb.local",
-        ).split(",")
+        for host in os.getenv("ALLOWED_HOSTS", DEFAULT_ALLOWED_HOSTS).split(",")
         if host.strip()
     ],
 )
@@ -3458,16 +3470,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         origin.strip()
-        for origin in os.getenv(
-            "CORS_ORIGINS",
-            "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001",
-        ).split(",")
+        for origin in os.getenv("CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
         if origin.strip()
     ],
-    allow_origin_regex=os.getenv(
-        "CORS_ORIGIN_REGEX",
-        r"https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}):3000",
-    ),
+    allow_origin_regex=os.getenv("CORS_ORIGIN_REGEX", DEFAULT_CORS_ORIGIN_REGEX),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],

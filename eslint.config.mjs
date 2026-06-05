@@ -13,6 +13,9 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
     "**/._*",
+    // The design prototype is loaded as ordered browser-global Babel scripts
+    // from public/design/*.html, not as imported Next/React modules.
+    "public/design/app/**",
   ]),
 ]);
 

@@ -48,6 +48,23 @@ const FOOD_DB = [
   { id: 'f14', name: 'Pasta bolognese',   brand: 'Homemade',  kcal: 540, protein: 28, carbs: 68, fat: 16, fiber: 6,  emoji: '🍝', tags: ['dinner'], servingG: 380, price: 3.80 },
 ];
 
+const FOOD_ALIASES = {
+  f1: ['greek yogurt', 'yogurt', 'йогурт', 'греческий йогурт', 'bol de yogur'],
+  f2: ['cold brew', 'coffee', 'кофе', 'колд брю', 'cafe', 'café'],
+  f3: ['chicken rice', 'chicken', 'курица', 'рис с курицей', 'pollo arroz'],
+  f4: ['protein bar', 'bar', 'протеиновый батончик', 'батончик', 'barrita'],
+  f5: ['banana', 'банан', 'plátano', 'platano'],
+  f6: ['atun', 'atún', 'tuna', 'тунец', 'atun claro'],
+  f7: ['avocado', 'toast', 'авокадо', 'тост', 'aguacate'],
+  f8: ['salmon', 'лосось', 'семга', 'salmón', 'salmon'],
+  f9: ['salad', 'салат', 'ensalada'],
+  f10: ['espresso', 'эспрессо', 'кофе', 'cafe', 'café'],
+  f11: ['almonds', 'миндаль', 'almendras'],
+  f12: ['whey', 'shake', 'протеин', 'шейк', 'batido'],
+  f13: ['oatmeal', 'oats', 'овсянка', 'каша', 'avena'],
+  f14: ['pasta', 'bolognese', 'паста', 'болоньезе'],
+};
+
 // seeded "today" so the app looks lived-in
 const SEED_LOG = [
   { uid: 's1', ref: 'f1',  mealId: 'breakfast', time: '08:12' },
@@ -57,6 +74,31 @@ const SEED_LOG = [
 ];
 
 const byId = (ref) => FOOD_DB.find(f => f.id === ref);
+
+function normalizeLookupText(value) {
+  return String(value || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+function foodLookupText(food) {
+  return normalizeLookupText([food.name, food.brand, ...(food.tags || []), ...(FOOD_ALIASES[food.id] || [])].join(' '));
+}
+function foodMatchesQuery(food, query) {
+  const q = normalizeLookupText(query).trim();
+  if (!q) return true;
+  const haystack = foodLookupText(food);
+  return q.split(/\s+/).filter(Boolean).every(term => haystack.includes(term));
+}
+function findFoodInText(text) {
+  const haystack = normalizeLookupText(text);
+  const matches = FOOD_DB.map(food => {
+    const terms = [food.name, ...(FOOD_ALIASES[food.id] || []), ...(food.tags || [])]
+      .map(normalizeLookupText)
+      .filter(term => term.length > 2);
+    const hit = terms.find(term => haystack.includes(term));
+    return hit ? { food, score: hit.length } : null;
+  }).filter(Boolean);
+  matches.sort((a, b) => b.score - a.score);
+  return matches[0]?.food || null;
+}
 
 function totalsFromLog(log) {
   const t = { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, count: log.length };
@@ -103,6 +145,25 @@ function storedJSON(key, fallback) {
     return fallback;
   }
 }
+function isLocalApiHost(hostname) {
+  return (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '0.0.0.0' ||
+    hostname.endsWith('.local') ||
+    /^10\./.test(hostname) ||
+    /^192\.168\./.test(hostname) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(hostname)
+  );
+}
+function trackfoodApiBase() {
+  const explicit = String(window.TRACKFOOD_API_BASE || '').trim().replace(/\/+$/, '');
+  if (explicit) return explicit;
+  const { protocol, hostname, origin } = window.location;
+  return isLocalApiHost(hostname || '127.0.0.1')
+    ? `${protocol}//${hostname || '127.0.0.1'}:8000`
+    : origin;
+}
 function hydrateLog(rows) {
   return (rows || []).map(item => {
     const food = item.food || byId(item.ref);
@@ -143,7 +204,16 @@ function useAppData(accountId = 'guest') {
     }));
   };
   const removeFood = (uid) => setLog(l => l.filter(i => i.uid !== uid));
-  const addPlan = (p) => setPlans(ps => [...ps, { ...p, id: 'p' + Date.now() }]);
+  const addPlan = (p) => setPlans(ps => {
+    const normalizedTitle = normalizeLookupText(p.title);
+    const exists = ps.some(item =>
+      item.date === p.date &&
+      item.type === p.type &&
+      item.time === p.time &&
+      normalizeLookupText(item.title) === normalizedTitle
+    );
+    return exists ? ps : [...ps, { ...p, id: 'p' + Date.now() }];
+  });
   const totals = totalsFromLog(log);
   return { log, totals, addFood, updateFoodAmount, removeFood, plans, addPlan };
 }
@@ -189,4 +259,5 @@ const useTheme = () => React.useContext(ThemeCtx);
 Object.assign(window, {
   PALETTES, MACROS, MEALS, FOOD_DB, SEED_LOG, GOALS,
   ThemeCtx, useTheme, makeTheme, fmt, eur, scaleFoodPortion, totalsFromLog, useAppData, dateKey, storedJSON, accountStorageKey, accountStorageId,
+  normalizeLookupText, foodMatchesQuery, findFoodInText, trackfoodApiBase,
 });

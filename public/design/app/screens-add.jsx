@@ -17,7 +17,7 @@ function AddScreen({ go, data, addFood, notify, initial }) {
   const brands = ['All', 'Masymas', 'Carrefour', 'Eroski', 'Homemade'];
   const results = FOOD_DB.filter(f =>
     (brand === 'All' || f.brand === brand) &&
-    (!q || f.name.toLowerCase().includes(q.toLowerCase()) || f.brand.toLowerCase().includes(q.toLowerCase()))
+    foodMatchesQuery(f, q)
   );
 
   const previewFood = (food) => scaleFoodPortion(food, food.servingG || 100);

@@ -165,7 +165,6 @@ function CoachScreen({ go, data, profile, addFood, addPlan, notify }) {
   }, [msgs, typing]);
 
   const lang = (text) => /[а-яё]/i.test(text) ? 'ru' : /[áéíóúñ¿¡]|\b(hola|comi|comí|calorias|gramos)\b/i.test(text) ? 'es' : 'en';
-  const apiBase = () => `${window.location.protocol}//${window.location.hostname || '127.0.0.1'}:8000`;
   const clientContext = () => {
     const meals = data.log.slice(-12).map(item => {
       const food = item.food;
@@ -185,7 +184,7 @@ function CoachScreen({ go, data, profile, addFood, addPlan, notify }) {
     const token = localStorage.getItem('tf-auth-token') || localStorage.getItem('trackfoodai-token');
     if (!token) return { content: null, error: 'no-token' };
     try {
-      const res = await fetch(`${apiBase()}/api/v1/assistant/messages`, {
+      const res = await fetch(`${trackfoodApiBase()}/api/v1/assistant/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ message: text, client_context: clientContext() }),
@@ -201,7 +200,7 @@ function CoachScreen({ go, data, profile, addFood, addPlan, notify }) {
     const low = text.toLowerCase();
     const language = lang(text);
     const grams = Number((low.match(/(\d{1,4})\s*(?:г|гр|g|gram|grams|gramos)/i) || [])[1]) || undefined;
-    const food = FOOD_DB.find(f => low.includes(f.name.toLowerCase().split(' ')[0]));
+    const food = findFoodInText(text);
     if (low.match(/log|add|ate|had|добав|залог|съел|ел|comí|agrega|añade/) && food) {
       addFood(food, 'snack', grams);
       notify(`Logged ${food.name}`);
@@ -267,6 +266,13 @@ function CoachScreen({ go, data, profile, addFood, addPlan, notify }) {
     setMsgs(m => [...m, { from: 'me', text }]);
     setInput(''); setTyping(true);
     const actionReply = runLocalAction(text);
+    if (actionReply) {
+      setTimeout(() => {
+        setTyping(false);
+        setMsgs(m => [...m, { from: 'ai', text: actionReply }]);
+      }, 320);
+      return;
+    }
     const backend = await askBackend(text);
     setTimeout(() => {
       setTyping(false);

@@ -50,14 +50,14 @@ Transform your meals into intelligent nutritional insights using computer vision
 
 ### AI/ML
 - **Computer Vision** — Meal image recognition
-- **Claude AI** — Personalized dietary insights
+- **Google Gemini** — Personalized dietary insights and assistant replies
 - **Comprehensive Food Database** — Accurate nutritional data
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 - Node.js 18+ and npm
-- Python 3.9+
+- Python 3.11+
 - PostgreSQL database
 - Google Gemini API key
 
@@ -106,6 +106,7 @@ Once the backend is running, visit:
 
 ```env
 # Backend
+DATABASE_URL=postgresql://user:password@localhost:5432/trackfoodai
 GEMINI_API_KEY=your_gemini_key_here
 GEMINI_MODEL=gemini-2.5-flash-lite
 ASSISTANT_DATABASE_URL=postgresql://user:password@localhost:5434/trackfoodai_assistant
@@ -114,6 +115,22 @@ SECRET_KEY=your_secret_key_here
 # Frontend
 NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
+
+### Vercel Deployment
+
+The Vercel deployment serves FastAPI from the same domain under `/api/v1/*`.
+Leave `NEXT_PUBLIC_API_URL` empty on Vercel unless you intentionally use an external backend.
+
+Set these Vercel environment variables for production data persistence:
+
+```env
+DATABASE_URL=postgresql://user:password@host:5432/trackfoodai
+ASSISTANT_DATABASE_URL=postgresql://user:password@host:5432/trackfoodai
+SECRET_KEY=long-random-production-secret
+GEMINI_API_KEY=your_gemini_key_here
+```
+
+If `DATABASE_URL` is missing on Vercel, the API starts in memory mode so auth buttons still respond, but accounts and diary data can disappear after a serverless cold start.
 
 ## 💡 Usage Examples
 

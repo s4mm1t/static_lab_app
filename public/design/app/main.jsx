@@ -66,8 +66,13 @@ function App() {
       diet: authMode === 'signup' ? authForm.diet : profile.diet,
     };
     if (authMode === 'signup') nextProfile.calorieGoal = estimateGoal(nextProfile);
-    const remoteProfile = await syncBackendAuth(authMode, authForm, nextProfile).catch(() => null);
-    const finalProfile = remoteProfile || nextProfile;
+    let finalProfile;
+    try {
+      finalProfile = await syncBackendAuth(authMode, authForm, nextProfile);
+    } catch (error) {
+      notify(error.message || 'Backend is not available');
+      return;
+    }
     if (authMode === 'signup') clearAccountData(finalProfile.email);
     setProfile(finalProfile);
     localStorage.setItem('tf-design-session', 'active');
@@ -345,7 +350,7 @@ function clearLegacyDesignCache() {
 }
 
 async function syncBackendAuth(mode, form, profile) {
-  const base = `${window.location.protocol}//${window.location.hostname || '127.0.0.1'}:8000`;
+  const base = trackfoodApiBase();
   const path = mode === 'signup' ? '/api/v1/auth/register' : '/api/v1/auth/login';
   const payload = mode === 'signup'
     ? {
@@ -364,9 +369,13 @@ async function syncBackendAuth(mode, form, profile) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) return null;
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.detail || `Backend auth failed (${response.status})`);
+  }
   const data = await response.json();
   localStorage.setItem('tf-auth-token', data.token);
+  localStorage.setItem('trackfoodai-token', data.token);
   return {
     ...profile,
     name: data.profile.name,
