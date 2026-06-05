@@ -1111,8 +1111,8 @@ function GuestPreview({
       <section className="guest-content">
         <header className="guest-topbar">
           <a className="mobile-brand" href="#top">
-            <span>TF</span>
-            <strong>TrackFood AI</strong>
+            <span>SL</span>
+            <strong>static_lab</strong>
           </a>
           <span className="dark-only-pill">Private beta</span>
         </header>
@@ -2547,7 +2547,7 @@ export default function TrackFoodApp() {
             }}
           >
             <BrandMark size="sm" />
-            <strong>TrackFood AI</strong>
+            <strong>static_lab</strong>
           </a>
           <button
             type="button"
@@ -2596,7 +2596,7 @@ export default function TrackFoodApp() {
             }}
           >
             <BrandMark size="sm" />
-            <strong>{tabs.find((tab) => tab.id === activeTab)?.label ?? "TrackFood AI"}</strong>
+            <strong>{tabs.find((tab) => tab.id === activeTab)?.label ?? "static_lab"}</strong>
           </a>
           <div className="topbar-actions">
             <AccountChip
@@ -3306,7 +3306,7 @@ export default function TrackFoodApp() {
           <section className="panel assistant-panel">
             <div className="panel-heading">
               <div>
-                <span className="eyebrow">TrackFood AI</span>
+                <span className="eyebrow">static_lab</span>
                 <h2>Assistant</h2>
               </div>
               <button type="button" className="secondary-button" onClick={() => void refreshAssistant()}>
@@ -3324,11 +3324,11 @@ export default function TrackFoodApp() {
               {assistantMessages.map((message) => (
                 <article key={message.id} className={`chat-bubble ${message.role}`}>
                   <div className="chat-avatar" aria-hidden="true">
-                    {message.role === "assistant" ? "TF" : "You"}
+                    {message.role === "assistant" ? "SL" : "You"}
                   </div>
                   <div className="chat-message">
                     <div className="chat-meta">
-                      <span>{message.role === "assistant" ? "TrackFood AI" : "You"}</span>
+                      <span>{message.role === "assistant" ? "static_lab" : "You"}</span>
                       {message.role === "user" && (
                         <button type="button" className="chat-edit-button" onClick={() => editAssistantMessage(message)}>
                           Edit
@@ -3341,10 +3341,10 @@ export default function TrackFoodApp() {
               ))}
               {isAssistantLoading && (
                 <article className="chat-bubble assistant is-loading">
-                  <div className="chat-avatar" aria-hidden="true">TF</div>
+                  <div className="chat-avatar" aria-hidden="true">SL</div>
                   <div className="chat-message">
                     <div className="chat-meta">
-                      <span>TrackFood AI</span>
+                      <span>static_lab</span>
                     </div>
                     <p>Thinking through your food log...</p>
                   </div>
@@ -3354,9 +3354,7 @@ export default function TrackFoodApp() {
                 <div className="assistant-error">
                   <strong>{assistantError}</strong>
                   <span>
-                    {assistantError === "AI key is not configured"
-                      ? "GEMINI_API_KEY is missing in the backend environment."
-                      : "Backend is configured. Try Sync again or send a new message."}
+                    Backend is configured. Try Sync again or send a new message.
                   </span>
                 </div>
               )}

@@ -21,10 +21,11 @@ function App() {
   const [route, setRoute] = React.useState({ screen: 'home', params: {} });
   const [entered, setEntered] = React.useState(() => localStorage.getItem('tf-design-session') === 'active');
   const [authMode, setAuthMode] = React.useState('signup');
-  const [authForm, setAuthForm] = React.useState({ name: 'Alex Rivera', email: 'alex.rivera@gmail.com', password: '', weightKg: '72', heightCm: '178', diet: 'balanced' });
+  const [authForm, setAuthForm] = React.useState({ name: '', email: '', password: '', weightKg: '', heightCm: '', diet: 'balanced' });
+  const [authBusy, setAuthBusy] = React.useState(false);
   const [profile, setProfile] = React.useState(() => {
-    try { return JSON.parse(localStorage.getItem('tf-design-profile') || 'null') || { name: 'Alex Rivera', email: 'alex.rivera@gmail.com' }; }
-    catch { return { name: 'Alex Rivera', email: 'alex.rivera@gmail.com' }; }
+    try { return JSON.parse(localStorage.getItem('tf-design-profile') || 'null') || {}; }
+    catch { return {}; }
   });
   const [toast, setToast] = React.useState(null);
   const [fabPulse, setFabPulse] = React.useState(false);
@@ -41,7 +42,7 @@ function App() {
     triggerAdd._t = setTimeout(() => setFabPulse(false), 360);
     openAdd(mealId, mode);
   };
-  const notify = (msg) => { setToast(msg); clearTimeout(notify._t); notify._t = setTimeout(() => setToast(null), 2200); };
+  const notify = (msg) => { setToast(safeText(msg)); clearTimeout(notify._t); notify._t = setTimeout(() => setToast(null), 2200); };
   const openTweaks = () => window.postMessage({ type: '__activate_edit_mode' }, '*');
   const clearDeviceSession = () => {
     localStorage.removeItem('tf-design-session');
@@ -54,32 +55,39 @@ function App() {
   };
   const submitAuth = async (event) => {
     event.preventDefault();
-    if (!authForm.email.trim() || !authForm.password.trim()) {
-      notify(authMode === 'signup' ? 'Add email and password' : 'Enter email and password');
+    if (authBusy) return;
+    const formError = authFormError(authMode, authForm);
+    if (formError) {
+      notify(formError);
       return;
     }
+    const email = authForm.email.trim().toLowerCase();
     const nextProfile = {
-      name: authMode === 'signup' ? (authForm.name.trim() || 'Alex Rivera') : (profile.name || 'Alex Rivera'),
-      email: authForm.email.trim() || profile.email || 'alex.rivera@gmail.com',
-      weightKg: authMode === 'signup' ? Number(authForm.weightKg) || 72 : profile.weightKg,
-      heightCm: authMode === 'signup' ? Number(authForm.heightCm) || 178 : profile.heightCm,
+      name: authMode === 'signup' ? authForm.name.trim() : (profile.name || email.split('@')[0] || 'User'),
+      email,
+      weightKg: authMode === 'signup' ? Number(authForm.weightKg) : profile.weightKg,
+      heightCm: authMode === 'signup' ? Number(authForm.heightCm) : profile.heightCm,
       diet: authMode === 'signup' ? authForm.diet : profile.diet,
     };
     if (authMode === 'signup') nextProfile.calorieGoal = estimateGoal(nextProfile);
-    let finalProfile;
+    setAuthBusy(true);
     try {
-      finalProfile = await syncBackendAuth(authMode, authForm, nextProfile);
+      const finalProfile = await syncBackendAuth(authMode, authForm, nextProfile);
+      const wasCreated = finalProfile._authCreated;
+      if (authMode === 'signup' && wasCreated) clearAccountData(finalProfile.email);
+      const cleanProfile = { ...finalProfile };
+      delete cleanProfile._authCreated;
+      setProfile(cleanProfile);
+      localStorage.setItem('tf-design-session', 'active');
+      localStorage.setItem('tf-design-profile', JSON.stringify(cleanProfile));
+      setEntered(true);
+      setRoute({ screen: 'home', params: {} });
+      notify(wasCreated ? 'Account created' : 'Welcome back');
     } catch (error) {
-      notify(error.message || 'Backend is not available');
-      return;
+      notify(safeText(error, 'Backend is not available'));
+    } finally {
+      setAuthBusy(false);
     }
-    if (authMode === 'signup') clearAccountData(finalProfile.email);
-    setProfile(finalProfile);
-    localStorage.setItem('tf-design-session', 'active');
-    localStorage.setItem('tf-design-profile', JSON.stringify(finalProfile));
-    setEntered(true);
-    setRoute({ screen: 'home', params: {} });
-    notify(authMode === 'signup' ? 'Account created' : 'Welcome back');
   };
   const logout = () => {
     clearDeviceSession();
@@ -121,6 +129,7 @@ function App() {
             setAuthMode={setAuthMode}
             authForm={authForm}
             setAuthForm={setAuthForm}
+            authBusy={authBusy}
             onSubmit={submitAuth}
           />
         ) : (
@@ -131,9 +140,9 @@ function App() {
                 : screens[route.screen]}
             </Screen>
             {/* bottom nav */}
-            <div style={{ position: 'absolute', left: 0, right: 0, bottom: -12, zIndex: 40, paddingBottom: 'calc(12px + env(safe-area-inset-bottom, 0px))',
+            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 40, paddingBottom: 'max(4px, env(safe-area-inset-bottom, 0px))',
               background: `linear-gradient(to top, ${theme.bg} 58%, transparent)`, pointerEvents: 'none' }}>
-              <div style={{ margin: '0 16px', height: 62, borderRadius: 22, background: theme.panel2, border: `1px solid ${theme.line}`,
+              <div style={{ margin: '0 16px', height: 58, borderRadius: 20, background: theme.panel2, border: `1px solid ${theme.line}`,
                 boxShadow: '0 10px 30px rgba(80,70,40,0.14)', display: 'flex', alignItems: 'center', justifyContent: 'space-around',
                 position: 'relative', pointerEvents: 'auto' }}>
                 {nav.map(n => {
@@ -141,7 +150,7 @@ function App() {
                     const on = route.screen === 'add';
                     return (
                       <button key={n.id} onClick={() => triggerAdd(route.params.mealId || 'breakfast')} style={{
-                        width: 54, height: 54, borderRadius: 18, border: 'none', cursor: 'pointer', marginTop: -22,
+                        width: 52, height: 52, borderRadius: 17, border: 'none', cursor: 'pointer', marginTop: -18,
                         background: theme.accent, color: theme.accentOn, display: 'flex', alignItems: 'center', justifyContent: 'center',
                         boxShadow: `0 8px 24px ${theme.accentGlow}, 0 0 0 5px ${theme.bg}`,
                         transform: fabPulse ? 'translateY(-2px) scale(1.08)' : on ? 'scale(1.04)' : 'scale(1)',
@@ -191,7 +200,7 @@ function Screen({ children, routeKey, motion, isCoach }) {
   return (
     <div key={routeKey} style={{
       position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden',
-      padding: 'calc(18px + env(safe-area-inset-top, 0px)) calc(18px + env(safe-area-inset-right, 0px)) calc(110px + env(safe-area-inset-bottom, 0px)) calc(18px + env(safe-area-inset-left, 0px))',
+      padding: 'calc(8px + env(safe-area-inset-top, 0px)) calc(18px + env(safe-area-inset-right, 0px)) calc(88px + env(safe-area-inset-bottom, 0px)) calc(18px + env(safe-area-inset-left, 0px))',
       display: isCoach ? 'flex' : 'block', flexDirection: 'column',
       opacity: 1,
       transform: shown ? 'none' : 'translateY(14px) scale(.985)',
@@ -202,7 +211,7 @@ function Screen({ children, routeKey, motion, isCoach }) {
   );
 }
 
-function Welcome({ theme, authMode, setAuthMode, authForm, setAuthForm, onSubmit }) {
+function Welcome({ theme, authMode, setAuthMode, authForm, setAuthForm, authBusy, onSubmit }) {
   const pct = 51;
   const macros = [{ k: 'protein', v: 94, g: 150 }, { k: 'carbs', v: 132, g: 250 }, { k: 'fat', v: 37, g: 72 }];
   const features = [
@@ -212,16 +221,16 @@ function Welcome({ theme, authMode, setAuthMode, authForm, setAuthForm, onSubmit
   ];
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box',
-      padding: 'calc(56px + env(safe-area-inset-top, 0px)) calc(24px + env(safe-area-inset-right, 0px)) calc(30px + env(safe-area-inset-bottom, 0px)) calc(24px + env(safe-area-inset-left, 0px))',
+      padding: 'calc(14px + env(safe-area-inset-top, 0px)) calc(24px + env(safe-area-inset-right, 0px)) calc(18px + env(safe-area-inset-bottom, 0px)) calc(24px + env(safe-area-inset-left, 0px))',
       overflowY: 'auto',
       background: `radial-gradient(130% 65% at 100% 0%, ${theme.accentGlow} 0%, transparent 52%), ${theme.bg}` }}>
       {/* header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <LogoBadge size={36} radius={12} />
-          <span style={{ color: theme.text, fontWeight: 800, fontSize: 15 }}>FoodTrack AI</span>
+          <span style={{ color: theme.text, fontWeight: 800, fontSize: 15 }}>static_lab</span>
         </div>
-        <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6, color: theme.muted, border: `1px solid ${theme.line}`, borderRadius: 999, padding: '5px 11px' }}>DEMO</div>
+        <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: 0.4, color: theme.muted, border: `1px solid ${theme.line}`, borderRadius: 999, padding: '5px 11px' }}>{nowTime()}</div>
       </div>
 
       {/* product hero preview — fills the upper space */}
@@ -289,17 +298,17 @@ function Welcome({ theme, authMode, setAuthMode, authForm, setAuthForm, onSubmit
       <form id="tf-auth-form" onSubmit={onSubmit} style={{ background: 'rgba(245,241,231,.72)', border: `1px solid ${theme.line}`, borderRadius: 22, padding: 14, marginTop: 18, boxShadow: theme.cardShadow, flexShrink: 0 }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, background: theme.elev, borderRadius: 999, padding: 4, marginBottom: 12 }}>
           {['signup','login'].map(mode => (
-            <button key={mode} type="button" onClick={() => setAuthMode(mode)} style={{ border: 'none', borderRadius: 999, padding: '10px 8px', background: authMode === mode ? theme.accent : 'transparent', color: authMode === mode ? theme.accentOn : theme.muted, fontWeight: 800 }}>
+            <button key={mode} type="button" disabled={authBusy} onClick={() => setAuthMode(mode)} style={{ border: 'none', borderRadius: 999, padding: '10px 8px', background: authMode === mode ? theme.accent : 'transparent', color: authMode === mode ? theme.accentOn : theme.muted, fontWeight: 800, opacity: authBusy ? 0.65 : 1 }}>
               {mode === 'signup' ? 'Sign up' : 'Log in'}
             </button>
           ))}
         </div>
         {authMode === 'signup' && (
           <>
-            <input value={authForm.name} onChange={e => setAuthForm(f => ({ ...f, name: e.target.value }))} placeholder="Name" style={authInput(theme)} />
+            <input value={authForm.name} onChange={e => setAuthForm(f => ({ ...f, name: e.target.value }))} placeholder="Name" autoComplete="name" disabled={authBusy} style={authInput(theme)} />
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              <input value={authForm.weightKg} onChange={e => setAuthForm(f => ({ ...f, weightKg: e.target.value }))} placeholder="Weight kg" inputMode="decimal" style={authInput(theme)} />
-              <input value={authForm.heightCm} onChange={e => setAuthForm(f => ({ ...f, heightCm: e.target.value }))} placeholder="Height cm" inputMode="decimal" style={authInput(theme)} />
+              <input value={authForm.weightKg} onChange={e => setAuthForm(f => ({ ...f, weightKg: e.target.value }))} placeholder="Weight kg" inputMode="decimal" autoComplete="off" disabled={authBusy} style={authInput(theme)} />
+              <input value={authForm.heightCm} onChange={e => setAuthForm(f => ({ ...f, heightCm: e.target.value }))} placeholder="Height cm" inputMode="decimal" autoComplete="off" disabled={authBusy} style={authInput(theme)} />
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 6, marginBottom: 10 }}>
               {[
@@ -307,25 +316,19 @@ function Welcome({ theme, authMode, setAuthMode, authForm, setAuthForm, onSubmit
                 ['cut', 'Cut'],
                 ['muscle', 'Muscle'],
               ].map(([id, label]) => (
-                <button key={id} type="button" onClick={() => setAuthForm(f => ({ ...f, diet: id }))} style={{ border: `1px solid ${authForm.diet === id ? theme.accent : theme.line2}`, borderRadius: 999, padding: '9px 6px', background: authForm.diet === id ? `${theme.accent}18` : theme.panel, color: authForm.diet === id ? theme.accent : theme.muted, fontWeight: 800, fontSize: 12 }}>
+                <button key={id} type="button" disabled={authBusy} onClick={() => setAuthForm(f => ({ ...f, diet: id }))} style={{ border: `1px solid ${authForm.diet === id ? theme.accent : theme.line2}`, borderRadius: 999, padding: '9px 6px', background: authForm.diet === id ? `${theme.accent}18` : theme.panel, color: authForm.diet === id ? theme.accent : theme.muted, fontWeight: 800, fontSize: 12, opacity: authBusy ? 0.65 : 1 }}>
                   {label}
                 </button>
               ))}
             </div>
           </>
         )}
-        <input value={authForm.email} onChange={e => setAuthForm(f => ({ ...f, email: e.target.value }))} placeholder="Email" inputMode="email" style={authInput(theme)} />
-        <input value={authForm.password} onChange={e => setAuthForm(f => ({ ...f, password: e.target.value }))} placeholder="Password" type="password" style={authInput(theme)} />
-        <Btn type="submit" full icon="arrow" style={{ marginTop: 4 }}>{authMode === 'signup' ? 'Create account' : 'Log in'}</Btn>
+        <input value={authForm.email} onChange={e => setAuthForm(f => ({ ...f, email: e.target.value }))} placeholder="Email" inputMode="email" autoComplete="email" autoCapitalize="none" spellCheck="false" disabled={authBusy} style={authInput(theme)} />
+        <input value={authForm.password} onChange={e => setAuthForm(f => ({ ...f, password: e.target.value }))} placeholder="Password" type="password" autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'} minLength={8} maxLength={72} disabled={authBusy} style={authInput(theme)} />
+        <Btn type="submit" full icon="arrow" disabled={authBusy} style={{ marginTop: 4 }}>{authBusy ? 'Working...' : (authMode === 'signup' ? 'Create account' : 'Log in')}</Btn>
       </form>
 
-      {/* CTAs pinned to bottom */}
-      <div style={{ marginTop: 'auto', paddingTop: 18, flexShrink: 0 }}>
-        <button type="button" onClick={() => {
-          setAuthMode('signup');
-          setAuthForm({ name: 'Alex Rivera', email: 'alex.rivera@gmail.com', password: 'demo-device-pass', weightKg: '72', heightCm: '178', diet: 'balanced' });
-        }} style={{ width: '100%', background: 'none', border: 'none', color: theme.muted, fontWeight: 600, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}>Fill demo credentials →</button>
-      </div>
+      <div style={{ marginTop: 'auto', minHeight: 14, flexShrink: 0 }} />
     </div>
   );
 }
@@ -340,9 +343,56 @@ function estimateGoal(profile) {
   return balanced;
 }
 
+function safeText(value, fallback = 'Something went wrong') {
+  if (!value) return fallback;
+  if (typeof value === 'string') return value;
+  if (value instanceof Error) return safeText(value.message, fallback);
+  if (Array.isArray(value)) return value.map(item => safeText(item, '')).filter(Boolean).join(' ') || fallback;
+  if (typeof value === 'object') {
+    return safeText(value.detail || value.message || value.msg, fallback);
+  }
+  return String(value);
+}
+
+function detailText(detail, fallback) {
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail.map(item => {
+      if (typeof item === 'string') return item;
+      const loc = Array.isArray(item?.loc) ? item.loc.filter(part => part !== 'body').join(' ') : '';
+      let msg = item?.msg || item?.message || item?.type || '';
+      if (loc === 'password' && /at least 8/i.test(msg)) msg = 'Password must be at least 8 characters.';
+      else if (loc === 'password' && /at most 72/i.test(msg)) msg = 'Password must be 72 characters or less.';
+      else if (loc === 'email') msg = 'Enter a valid email address.';
+      else if (loc === 'name' && /at least 2/i.test(msg)) msg = 'Name must be at least 2 characters.';
+      else if (loc && msg) msg = `${loc}: ${msg}`;
+      return safeText(msg, '');
+    }).filter(Boolean);
+    return parts.length ? parts.join(' ') : fallback;
+  }
+  return safeText(detail, fallback);
+}
+
+function authFormError(mode, form) {
+  const email = form.email.trim().toLowerCase();
+  const password = form.password || '';
+  if (!email || !password.trim()) return mode === 'signup' ? 'Add email and password.' : 'Enter email and password.';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return 'Enter a valid email address.';
+  if (password.length < 8) return 'Password must be at least 8 characters.';
+  if (password.length > 72) return 'Password must be 72 characters or less.';
+  if (mode === 'signup') {
+    if (form.name.trim().length < 2) return 'Name must be at least 2 characters.';
+    const weight = Number(form.weightKg);
+    const height = Number(form.heightCm);
+    if (!Number.isFinite(weight) || weight < 25 || weight > 350) return 'Check weight kg.';
+    if (!Number.isFinite(height) || height < 90 || height > 260) return 'Check height cm.';
+  }
+  return '';
+}
+
 function clearAccountData(email) {
   const account = accountStorageId(email);
-  ['log', 'plans', 'coach', 'coach-v2'].forEach(area => localStorage.removeItem(accountStorageKey(account, area)));
+  ['log', 'plans', 'coach', 'coach-v2', 'week-stats'].forEach(area => localStorage.removeItem(accountStorageKey(account, area)));
 }
 
 function clearLegacyDesignCache() {
@@ -364,16 +414,33 @@ async function syncBackendAuth(mode, form, profile) {
         diet_type: profile.diet,
       }
     : { email: profile.email, password: form.password };
-  const response = await fetch(`${base}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || `Backend auth failed (${response.status})`);
+  const postAuth = async (targetPath, body) => {
+    const response = await fetch(`${base}${targetPath}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(detailText(data.detail, `Backend auth failed (${response.status})`));
+      error.status = response.status;
+      error.detail = data.detail;
+      throw error;
+    }
+    return data;
+  };
+  let data;
+  let created = mode === 'signup';
+  try {
+    data = await postAuth(path, payload);
+  } catch (error) {
+    if (mode === 'signup' && error.status === 409) {
+      data = await postAuth('/api/v1/auth/login', { email: profile.email, password: form.password });
+      created = false;
+    } else {
+      throw error;
+    }
   }
-  const data = await response.json();
   localStorage.setItem('tf-auth-token', data.token);
   localStorage.setItem('trackfoodai-token', data.token);
   return {
@@ -384,6 +451,7 @@ async function syncBackendAuth(mode, form, profile) {
     heightCm: data.profile.height_cm || profile.heightCm,
     diet: data.profile.diet_type || profile.diet,
     calorieGoal: data.profile.calorie_goal || profile.calorieGoal,
+    _authCreated: created,
   };
 }
 

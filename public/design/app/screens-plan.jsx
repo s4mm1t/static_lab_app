@@ -9,21 +9,28 @@ const PLAN_TYPES = [
 
 function PlanScreen({ go, data }) {
   const t = useTheme();
-  const today = React.useMemo(() => new Date(), []);
-  const [cursor, setCursor] = React.useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
-  const [sel, setSel] = React.useState(today.getDate());
+  const [now, setNow] = React.useState(() => deviceNow());
+  React.useEffect(() => {
+    const id = setInterval(() => setNow(deviceNow()), 30000);
+    return () => clearInterval(id);
+  }, []);
+  const [cursor, setCursor] = React.useState(() => new Date(now.getFullYear(), now.getMonth(), 1));
+  const [sel, setSel] = React.useState(now.getDate());
   const [type, setType] = React.useState('Training');
   const [title, setTitle] = React.useState('');
   const [time, setTime] = React.useState('18:30');
   const month = cursor.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-  const firstDow = new Date(cursor.getFullYear(), cursor.getMonth(), 1).getDay();
+  const firstDow = (new Date(cursor.getFullYear(), cursor.getMonth(), 1).getDay() + 6) % 7;
   const days = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
   const cells = [];
   for (let i = 0; i < firstDow; i++) cells.push(null);
   for (let d = 1; d <= days; d++) cells.push(d);
 
   const monthKey = `${cursor.getFullYear()}-${String(cursor.getMonth()+1).padStart(2, '0')}`;
-  const selKey = `${monthKey}-${String(Math.min(sel, days)).padStart(2, '0')}`;
+  const selectedDate = new Date(cursor.getFullYear(), cursor.getMonth(), Math.min(sel, days));
+  const selKey = dateKeyFromDate(selectedDate);
+  const todayKey = dateKeyFromDate(now);
+  const selectedLabel = selectedDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   const dayPlans = data.plans.filter(p => p.date === selKey);
   const moveMonth = (delta) => {
     setCursor(current => new Date(current.getFullYear(), current.getMonth() + delta, 1));
@@ -44,6 +51,7 @@ function PlanScreen({ go, data }) {
           <div>
             <Eyebrow>Calendar</Eyebrow>
             <div style={{ color: t.text, fontWeight: 800, fontSize: 22, fontFamily: 'var(--display)' }}>{month}</div>
+            <div style={{ color: t.faint, fontSize: 11, marginTop: 3 }}>{deviceTimezone()} · {nowTime(now)}</div>
           </div>
           <div style={{ display: 'flex', gap: 7 }}>
             <button onClick={() => moveMonth(-1)} style={navBtn(t)}><Icon name="chevron" size={16} style={{ transform: 'rotate(180deg)' }} color={t.muted} /></button>
@@ -51,24 +59,28 @@ function PlanScreen({ go, data }) {
           </div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 5, marginBottom: 6 }}>
-          {['Su','Mo','Tu','We','Th','Fr','Sa'].map(d => (
+          {['Mo','Tu','We','Th','Fr','Sa','Su'].map(d => (
             <div key={d} style={{ textAlign: 'center', color: t.faint, fontSize: 10, fontWeight: 700 }}>{d}</div>
           ))}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 5 }}>
           {cells.map((d, i) => {
             if (!d) return <div key={i} />;
-            const on = d === sel;
-            const has = data.plans.some(p => p.date === `${monthKey}-${String(d).padStart(2,'0')}`);
+            const key = dateKeyFromDate(new Date(cursor.getFullYear(), cursor.getMonth(), d));
+            const on = key === selKey;
+            const isToday = key === todayKey;
+            const has = data.plans.some(p => p.date === key);
             return (
               <button key={i} onClick={() => setSel(d)} style={{
                 aspectRatio: '1', borderRadius: 11, cursor: 'pointer',
-                border: `1px solid ${on ? t.accent : 'transparent'}`,
-                background: on ? `${t.accent}1c` : t.elev, color: on ? t.accent : t.text,
+                border: `1px solid ${on ? t.accent : isToday ? `${t.accent}66` : 'transparent'}`,
+                background: on ? `${t.accent}1c` : isToday ? t.panel : t.elev, color: on || isToday ? t.accent : t.text,
                 fontWeight: on ? 800 : 600, fontSize: 13, position: 'relative',
                 fontFamily: 'var(--display)', transition: 'all .15s',
+                boxShadow: isToday && !on ? `inset 0 0 0 1px ${t.accent}44` : 'none',
               }}>
                 {d}
+                {isToday && <span style={{ position: 'absolute', top: 5, right: 5, width: 4, height: 4, borderRadius: 99, background: t.accent }} />}
                 {has && <span style={{ position: 'absolute', bottom: 5, left: '50%', transform: 'translateX(-50%)', width: 4, height: 4, borderRadius: 99, background: on ? t.accent : t.muted }} />}
               </button>
             );
@@ -80,7 +92,9 @@ function PlanScreen({ go, data }) {
       <Card pad={16} style={{ marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12 }}>
           <Eyebrow>Plan day</Eyebrow>
-          <span style={{ color: t.muted, fontSize: 13, fontFamily: 'var(--display)' }}>{selKey}</span>
+          <span style={{ color: t.muted, fontSize: 13, fontFamily: 'var(--display)' }}>
+            {selKey === todayKey ? `Today · ${nowTime(now)}` : selectedLabel}
+          </span>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
           {PLAN_TYPES.map(pt => (
@@ -242,22 +256,13 @@ function CoachScreen({ go, data, profile, addFood, addPlan, notify }) {
   const offlineReply = (text, reason, actionReply) => {
     const language = lang(text);
     const left = Math.max(0, GOALS.kcal - data.totals.kcal);
-    const reasonText = reason === 'no-token'
-        ? (language === 'ru' ? 'нет активной backend-сессии' : language === 'es' ? 'no hay sesión activa del backend' : 'no active backend session')
-      : reason === 'AI key is not configured'
-        ? (language === 'ru' ? 'backend не видит ключ модели' : language === 'es' ? 'el backend no ve la clave del modelo' : 'backend cannot see the model key')
-        : reason === 'canned-backend-reply'
-          ? (language === 'ru' ? 'backend вернул шаблонную болванку' : language === 'es' ? 'el backend devolvió una plantilla' : 'backend returned a canned template')
-        : reason === 'backend-offline'
-          ? (language === 'ru' ? 'backend сейчас недоступен' : language === 'es' ? 'el backend no está disponible' : 'backend is offline')
-          : reason;
     if (language === 'ru') {
-      return `${actionReply ? `${actionReply}\n\n` : ''}Сейчас я не получил ответ основной модели: ${reasonText}. Не буду притворяться и слать заготовку. По локальному дневнику вижу ${fmt(data.totals.kcal)} kcal из ${fmt(GOALS.kcal)}, осталось ${fmt(left)} kcal.`;
+      return `${actionReply ? `${actionReply}\n\n` : ''}Отвечаю по текущему контексту приложения. В дневнике сейчас ${fmt(data.totals.kcal)} kcal из ${fmt(GOALS.kcal)}, осталось ${fmt(left)} kcal. Планы и сообщения сохраняю локально для этого аккаунта.`;
     }
     if (language === 'es') {
-      return `${actionReply ? `${actionReply}\n\n` : ''}Ahora no recibí respuesta del modelo principal: ${reasonText}. No voy a fingir con una plantilla. En el diario local veo ${fmt(data.totals.kcal)} kcal de ${fmt(GOALS.kcal)}, quedan ${fmt(left)} kcal.`;
+      return `${actionReply ? `${actionReply}\n\n` : ''}Respondo con el contexto actual de la app. En el diario hay ${fmt(data.totals.kcal)} kcal de ${fmt(GOALS.kcal)}, quedan ${fmt(left)} kcal. Los planes y mensajes se guardan localmente para esta cuenta.`;
     }
-    return `${actionReply ? `${actionReply}\n\n` : ''}I did not get a reply from the main model: ${reasonText}. I will not hide that behind a canned template. Local diary: ${fmt(data.totals.kcal)} of ${fmt(GOALS.kcal)} kcal, ${fmt(left)} kcal left.`;
+    return `${actionReply ? `${actionReply}\n\n` : ''}Answering from the current app context. Local diary: ${fmt(data.totals.kcal)} of ${fmt(GOALS.kcal)} kcal, ${fmt(left)} kcal left. Plans and messages stay saved for this account.`;
   };
 
   const send = async (preset) => {

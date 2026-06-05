@@ -22,6 +22,7 @@ import httpx
 import jwt
 import psycopg
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from psycopg import errors
@@ -1451,6 +1452,33 @@ def issue_token(user: dict[str, Any]) -> str:
 
 def unauthorized(detail: str = "Invalid bearer token") -> HTTPException:
     return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail)
+
+
+def validation_error_message(errors: list[dict[str, Any]]) -> str:
+    messages: list[str] = []
+    for error in errors:
+        loc = [
+            str(part).replace("_", " ")
+            for part in error.get("loc", [])
+            if part not in {"body", "query", "path"}
+        ]
+        field = " ".join(loc).strip()
+        msg = str(error.get("msg") or "Invalid value").strip()
+        if field == "password" and "at least 8" in msg:
+            msg = "Password must be at least 8 characters."
+        elif field == "password" and "at most 72" in msg:
+            msg = "Password must be 72 characters or less."
+        elif field == "email":
+            msg = "Enter a valid email address."
+        elif field == "name" and "at least 2" in msg:
+            msg = "Name must be at least 2 characters."
+        elif field in {"weight kg", "height cm"}:
+            msg = f"Check {field}."
+        elif field:
+            msg = f"{field}: {msg}"
+        messages.append(msg)
+
+    return " ".join(dict.fromkeys(messages)) or "Check the form and try again."
 
 
 def get_current_user(
@@ -3314,7 +3342,7 @@ def assistant_food_log_action(user_id: str, message: str) -> str | None:
             food_id=food.id,
             meal_slot=meal_slot,
             serving_multiplier=multiplier,
-            note="Added by TrackFood AI",
+            note="Added by static_lab",
         ),
     )
 
@@ -3335,7 +3363,7 @@ def assistant_food_log_action(user_id: str, message: str) -> str | None:
 
 
 ASSISTANT_SYSTEM_PROMPT = (
-    "You are TrackFood AI, a sharp nutrition and planning assistant inside a food tracker. "
+    "You are static_lab, a sharp nutrition and planning assistant inside a food tracker. "
     "You are multilingual: answer in the same language the user uses, especially English, Russian, or Spanish. "
     "This language rule is strict: if the latest user message is Russian, every sentence must be Russian; if Spanish, every sentence must be Spanish. "
     "If the user mixes languages, follow the dominant language or the language they explicitly request. "
@@ -3379,16 +3407,133 @@ def assistant_system_parts(app_context: str, action_note: str = "") -> list[dict
     return parts
 
 
+def assistant_context_value(app_context: str, label: str, default: str = "not set") -> str:
+    matches = re.findall(rf"^{re.escape(label)}:\s*(.+)$", app_context, flags=re.M)
+    return normalize_text(matches[-1]) if matches else default
+
+
+def assistant_context_value_any(app_context: str, labels: list[str], default: str = "not set") -> str:
+    for label in labels:
+        value = assistant_context_value(app_context, label, "")
+        if value:
+            return value
+    return default
+
+
+def assistant_context_metric(app_context: str, patterns: list[str], default: str = "not set") -> str:
+    for pattern in patterns:
+        matches = re.findall(pattern, app_context, flags=re.I | re.M)
+        if matches:
+            match = matches[-1]
+            if isinstance(match, tuple):
+                match = " ".join(str(part) for part in match if part)
+            return normalize_text(str(match))
+    return default
+
+
+def assistant_context_products(app_context: str) -> list[dict[str, str]]:
+    products: list[dict[str, str]] = []
+    pattern = re.compile(
+        r"^- (?P<name>[^;\n]+);.*?; (?P<kcal>\d+(?:\.\d+)?) kcal; "
+        r"P (?P<protein>\d+(?:\.\d+)?)g, C (?P<carbs>\d+(?:\.\d+)?)g, "
+        r"F (?P<fat>\d+(?:\.\d+)?)g.*?price: (?P<price>[^\n]+)",
+        re.M,
+    )
+    for match in pattern.finditer(app_context):
+        products.append({key: normalize_text(value) for key, value in match.groupdict().items()})
+        if len(products) >= 3:
+            break
+    return products
+
+
+def generate_local_assistant_reply(
+    messages: list[AssistantMessageResponse],
+    app_context: str,
+    action_note: str = "",
+) -> str:
+    latest = next((message.content for message in reversed(messages) if message.role == "user"), "")
+    language = assistant_language(latest)
+    goal = assistant_context_value(app_context, "Daily calorie goal", "not set")
+    logged = assistant_context_metric(
+        app_context,
+        [
+            r"Today totals in mobile UI:\s*([0-9, ]+\s*kcal)",
+            r"Today calories logged:\s*([0-9, ]+\s*kcal)",
+        ],
+        "0 kcal",
+    )
+    remaining = assistant_context_metric(
+        app_context,
+        [
+            r"Today remaining in mobile UI:\s*([0-9, ]+\s*kcal)",
+            r"Today remaining calories:\s*([0-9, ]+\s*kcal)",
+        ],
+        "not set",
+    )
+    diet = assistant_context_value(app_context, "Diet type", "balanced")
+    weight = assistant_context_value(app_context, "Weight", "not set")
+    height = assistant_context_value(app_context, "Height", "not set")
+    products = assistant_context_products(app_context)
+
+    if products:
+        first = products[0]
+        second = products[1] if len(products) > 1 else None
+        if language == "ru":
+            extra = f" Вторым вариантом можно взять {second['name']}." if second else ""
+            return sanitize_assistant_reply(
+                f"По твоему текущему контексту я бы начал с {first['name']}: {first['kcal']} kcal, "
+                f"белки {first['protein']}g, углеводы {first['carbs']}g, жиры {first['fat']}g, цена {first['price']}.{extra}\n\n"
+                f"Сегодня в дневнике {logged}, осталось {remaining}. Профиль: {weight}, {height}, режим {diet}.\n"
+                "Что дальше:\nНапиши граммовку, и я добавлю продукт в дневник или пересчитаю порцию."
+            )
+        if language == "es":
+            extra = f" Como segunda opción, {second['name']}." if second else ""
+            return sanitize_assistant_reply(
+                f"Con tu contexto actual empezaría por {first['name']}: {first['kcal']} kcal, "
+                f"proteína {first['protein']}g, carbs {first['carbs']}g, grasa {first['fat']}g, precio {first['price']}.{extra}\n\n"
+                f"Hoy en el diario: {logged}, quedan {remaining}. Perfil: {weight}, {height}, dieta {diet}.\n"
+                "Qué hacer ahora:\nEscribe los gramos y lo añado al diario o recalculo la porción."
+            )
+        extra = f" A second option is {second['name']}." if second else ""
+        return sanitize_assistant_reply(
+            f"From your current context I would start with {first['name']}: {first['kcal']} kcal, "
+            f"protein {first['protein']}g, carbs {first['carbs']}g, fat {first['fat']}g, price {first['price']}.{extra}\n\n"
+            f"Diary today: {logged}, remaining {remaining}. Profile: {weight}, {height}, diet {diet}.\n"
+            "What to do now:\nSend grams and I will add it to the diary or recalculate the portion."
+        )
+
+    if language == "ru":
+        note = f"{action_note}\n\n" if action_note else ""
+        return sanitize_assistant_reply(
+            f"{note}Я вижу текущий профиль, дневник и планы этого аккаунта. Сегодня в дневнике {logged}, "
+            f"цель {goal}, осталось {remaining}. Профиль: {weight}, {height}, режим {diet}.\n\n"
+            "Могу работать по твоему сообщению: добавить еду с граммовкой, поставить тренировку в календарь, "
+            "посчитать остаток или подобрать продукт из базы."
+        )
+    if language == "es":
+        note = f"{action_note}\n\n" if action_note else ""
+        return sanitize_assistant_reply(
+            f"{note}Veo el perfil, diario y planes de esta cuenta. Hoy hay {logged}, "
+            f"meta {goal}, quedan {remaining}. Perfil: {weight}, {height}, dieta {diet}.\n\n"
+            "Puedo seguir tu mensaje: añadir comida con gramos, crear un entrenamiento en el calendario, "
+            "calcular lo restante o elegir un producto de la base."
+        )
+    note = f"{action_note}\n\n" if action_note else ""
+    return sanitize_assistant_reply(
+        f"{note}I can see this account's profile, diary, and plans. Today: {logged}, "
+        f"goal {goal}, remaining {remaining}. Profile: {weight}, {height}, diet {diet}.\n\n"
+        "I can act on your message: add food with grams, create a workout in the calendar, "
+        "calculate what is left, or choose a product from the database."
+    )
+
+
 def generate_assistant_reply(
     messages: list[AssistantMessageResponse],
     app_context: str,
     action_note: str = "",
 ) -> str:
     if not GEMINI_API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="AI key is not configured",
-        )
+        return generate_local_assistant_reply(messages, app_context, action_note)
 
     contents = [
         {
@@ -3444,9 +3589,9 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="TrackFood AI Backend",
+    title="static_lab Backend",
     version="1.1.0",
-    description="FastAPI app service for TrackFood AI.",
+    description="FastAPI app service for static_lab.",
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
@@ -3456,6 +3601,17 @@ app = FastAPI(
         "docExpansion": "list",
     },
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    _: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": validation_error_message(exc.errors())},
+    )
 
 app.add_middleware(
     TrustedHostMiddleware,
@@ -3585,7 +3741,7 @@ def root() -> RedirectResponse:
 @app.get("/api/v1/root", tags=["App"])
 def root_payload() -> dict[str, str]:
     return {
-        "name": "TrackFood AI Backend",
+        "name": "static_lab Backend",
         "docs": "/docs",
         "health": "/health",
         "foods": "/api/v1/foods",
@@ -3597,7 +3753,7 @@ def root_payload() -> dict[str, str]:
 def health() -> HealthResponse:
     return HealthResponse(
         status="ok",
-        service="trackfoodai-backend",
+        service="static-lab-backend",
         timestamp=now_iso(),
         database="memory" if USE_MEMORY_STORAGE else "postgres",
         products=count_foods(),
@@ -3607,7 +3763,7 @@ def health() -> HealthResponse:
 @app.get("/api/v1/status", response_model=AppStatusResponse, tags=["App"])
 def app_status() -> AppStatusResponse:
     return AppStatusResponse(
-        name="TrackFood AI",
+        name="static_lab",
         version="1.1.0",
         environment=os.getenv("APP_ENV", "local"),
         docs_url="/docs",
@@ -3670,7 +3826,7 @@ def estimate_nutrition(
         fat_g=best_food.fat_g,
         fiber_g=best_food.fiber_g,
         confidence=confidence,
-        note="Matched against the TrackFood AI product database.",
+        note="Matched against the static_lab product database.",
     )
 
 

@@ -128,15 +128,16 @@ function Card({ children, style, pad = 18, onClick, glow, className }) {
 }
 
 // ── Button ────────────────────────────────────────────────────────────
-function Btn({ children, onClick, variant = 'primary', size = 'md', style, icon, full, type = 'button' }) {
+function Btn({ children, onClick, variant = 'primary', size = 'md', style, icon, full, type = 'button', disabled = false }) {
   const t = useTheme();
   const [press, setPress] = React.useState(false);
   const base = {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-    border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 700,
+    border: 'none', cursor: disabled ? 'not-allowed' : 'pointer', fontFamily: 'inherit', fontWeight: 700,
     borderRadius: 999, width: full ? '100%' : undefined, whiteSpace: 'nowrap',
     transition: 'transform .12s ease, filter .12s ease, background .2s',
-    transform: press ? 'scale(0.96)' : 'scale(1)',
+    transform: press && !disabled ? 'scale(0.96)' : 'scale(1)',
+    opacity: disabled ? 0.62 : 1,
     fontSize: size === 'sm' ? 13 : 15, padding: size === 'sm' ? '9px 14px' : '13px 22px',
     letterSpacing: 0.2,
   };
@@ -148,8 +149,8 @@ function Btn({ children, onClick, variant = 'primary', size = 'md', style, icon,
     danger:  { background: 'rgba(255,96,96,0.12)', color: t.danger, border: '1px solid rgba(255,96,96,0.3)' },
   };
   return (
-    <button type={type} onClick={onClick}
-      onPointerDown={() => setPress(true)} onPointerUp={() => setPress(false)} onPointerLeave={() => setPress(false)}
+    <button type={type} onClick={onClick} disabled={disabled}
+      onPointerDown={() => !disabled && setPress(true)} onPointerUp={() => setPress(false)} onPointerLeave={() => setPress(false)}
       style={{ ...base, ...variants[variant], ...style }}>
       {icon && <Icon name={icon} size={size === 'sm' ? 16 : 18} stroke={2.4} />}
       {children}

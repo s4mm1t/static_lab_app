@@ -114,6 +114,22 @@ def test_auth_meal_log_and_delete() -> None:
         assert deleted.json()["status"] == "deleted"
 
 
+def test_auth_validation_errors_are_strings() -> None:
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "name": "Nika Stone",
+                "email": "nika@example.com",
+                "password": "short",
+                "calorie_goal": 1900,
+                "activity_level": "balanced",
+            },
+        )
+        assert response.status_code == 422
+        assert response.json()["detail"] == "Password must be at least 8 characters."
+
+
 def test_admin_security_and_legacy_password_migration() -> None:
     with TestClient(app) as client:
         admin = client.post(
@@ -179,7 +195,7 @@ def test_admin_security_and_legacy_password_migration() -> None:
         assert MEMORY_USERS_BY_ID["legacy-user-id"]["password_scheme"] == "bcrypt"
 
 
-def test_assistant_requires_configured_key() -> None:
+def test_assistant_falls_back_to_local_context_without_provider_key() -> None:
     with TestClient(app) as client:
         register = client.post(
             "/api/v1/auth/register",
@@ -198,11 +214,23 @@ def test_assistant_requires_configured_key() -> None:
 
         chat = client.post(
             "/api/v1/assistant/messages",
-            json={"message": "What should I eat after training?"},
+            json={
+                "message": "Что мне съесть после тренировки?",
+                "client_context": (
+                    "Today totals in mobile UI: 185 kcal, protein 14g, carbs 22g, fat 5g\n"
+                    "Today remaining in mobile UI: 1915 kcal\n"
+                    "goal 2100 kcal"
+                ),
+            },
             headers=headers,
         )
-        assert chat.status_code == 503
-        assert chat.json()["detail"] == "AI key is not configured"
+        assert chat.status_code == 200
+        payload = chat.json()
+        assert payload["role"] == "assistant"
+        assert "ключ" not in payload["content"].lower()
+        assert "дневник" in payload["content"].lower()
+        assert "185 kcal" in payload["content"]
+        assert "1915 kcal" in payload["content"]
 
 
 def test_assistant_system_parts_include_agents_md(monkeypatch, tmp_path) -> None:
@@ -241,7 +269,7 @@ def test_assistant_learns_user_corrections_without_provider_key() -> None:
             json={"message": "запомни: отвечай короче и без лишней вежливости"},
             headers=headers,
         )
-        assert chat.status_code == 503
+        assert chat.status_code == 200
         lessons = list_ai_lessons_for_user(payload["profile"]["id"])
         assert lessons == ["отвечай короче и без лишней вежливости"]
         app_context = build_assistant_app_context(MEMORY_USERS_BY_ID[payload["profile"]["id"]])
@@ -315,7 +343,7 @@ def test_assistant_adds_previous_suggestion_to_diary() -> None:
             context_id="ctx",
             role="assistant",
             content=(
-                "Возьми Chicken rice bowl из TrackFood AI (612 kcal).\n"
+                "Возьми Chicken rice bowl из static_lab (612 kcal).\n"
                 "К ним добавь Greek yogurt berries (238 kcal).\n"
                 "Итого: 850 kcal."
             ),

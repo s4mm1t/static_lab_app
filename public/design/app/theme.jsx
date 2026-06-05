@@ -215,17 +215,54 @@ function useAppData(accountId = 'guest') {
     return exists ? ps : [...ps, { ...p, id: 'p' + Date.now() }];
   });
   const totals = totalsFromLog(log);
-  return { log, totals, addFood, updateFoodAmount, removeFood, plans, addPlan };
+  return { accountId: dataKey, log, totals, addFood, updateFoodAmount, removeFood, plans, addPlan };
 }
 
-function nowTime() {
-  const d = new Date();
+function deviceNow() {
+  return new Date();
+}
+function deviceTimezone() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local time'; }
+  catch { return 'Local time'; }
+}
+function nowTime(date = deviceNow()) {
+  const d = new Date(date);
   return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
-function dateKey(offset = 0) {
-  const d = new Date();
-  d.setDate(d.getDate() + offset);
+function dateKeyFromDate(date) {
+  const d = new Date(date);
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function dateKey(offset = 0, anchor = deviceNow()) {
+  const d = new Date(anchor);
+  d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() + offset);
+  return dateKeyFromDate(d);
+}
+function deviceDateTimeLabel(date = deviceNow()) {
+  const d = new Date(date);
+  const dateLabel = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  return `${dateLabel} · ${nowTime(d)}`;
+}
+function weekDaysMondayFirst(anchor = deviceNow()) {
+  const start = new Date(anchor);
+  start.setHours(12, 0, 0, 0);
+  const mondayOffset = (start.getDay() + 6) % 7;
+  start.setDate(start.getDate() - mondayOffset);
+  const todayKey = dateKeyFromDate(anchor);
+  return Array.from({ length: 7 }, (_, index) => {
+    const d = new Date(start);
+    d.setDate(start.getDate() + index);
+    const key = dateKeyFromDate(d);
+    return {
+      key,
+      date: d,
+      day: d.getDate(),
+      label: d.toLocaleDateString('en-US', { weekday: 'short' }).slice(0, 2),
+      longLabel: d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }),
+      isToday: key === todayKey,
+    };
+  });
 }
 
 // ── Theme tokens (Sauge — botanical light) ────────────────────────────
@@ -258,6 +295,8 @@ const useTheme = () => React.useContext(ThemeCtx);
 
 Object.assign(window, {
   PALETTES, MACROS, MEALS, FOOD_DB, SEED_LOG, GOALS,
-  ThemeCtx, useTheme, makeTheme, fmt, eur, scaleFoodPortion, totalsFromLog, useAppData, dateKey, storedJSON, accountStorageKey, accountStorageId,
+  ThemeCtx, useTheme, makeTheme, fmt, eur, scaleFoodPortion, totalsFromLog, useAppData, dateKey, dateKeyFromDate,
+  deviceNow, deviceTimezone, deviceDateTimeLabel, weekDaysMondayFirst, nowTime,
+  storedJSON, accountStorageKey, accountStorageId,
   normalizeLookupText, foodMatchesQuery, findFoodInText, trackfoodApiBase,
 });

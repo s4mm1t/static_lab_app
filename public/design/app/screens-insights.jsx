@@ -5,12 +5,28 @@ function InsightsScreen({ go, data }) {
   const { totals } = data;
   const pct = Math.min(100, Math.round((totals.kcal / GOALS.kcal) * 100));
   const left = Math.max(0, GOALS.kcal - totals.kcal);
-  const week = [
-    { d: 'Sa', v: 2180 }, { d: 'Su', v: 1740 }, { d: 'Mo', v: 2390 }, { d: 'Tu', v: 2050 },
-    { d: 'We', v: 2260 }, { d: 'Th', v: totals.kcal }, { d: 'Fr', v: 0 },
-  ];
+  const weekCacheKey = accountStorageKey(data.accountId || 'guest', 'week-stats');
+  const [weekCache, setWeekCache] = React.useState(() => storedJSON(weekCacheKey, {}));
+  React.useEffect(() => {
+    setWeekCache(storedJSON(weekCacheKey, {}));
+  }, [weekCacheKey]);
+  const todayKey = dateKey(0);
+  React.useEffect(() => {
+    setWeekCache(previous => {
+      if (previous[todayKey] === totals.kcal) return previous;
+      const next = { ...previous, [todayKey]: totals.kcal };
+      localStorage.setItem(weekCacheKey, JSON.stringify(next));
+      return next;
+    });
+  }, [todayKey, totals.kcal, weekCacheKey]);
+  const week = weekDaysMondayFirst().map(day => ({
+    ...day,
+    d: day.label,
+    v: day.isToday ? totals.kcal : Number(weekCache[day.key] || 0),
+  }));
   const maxV = Math.max(GOALS.kcal, ...week.map(w => w.v));
-  const avg = Math.round(week.slice(0, 6).reduce((a, b) => a + b.v, 0) / 6);
+  const avg = Math.round(week.reduce((a, b) => a + b.v, 0) / 7);
+  const consistency = `${week.filter(w => w.v > 0).length}/7`;
 
   const [meal, setMeal] = React.useState('Yogur Danone con avena, banana y miel');
   const [match, setMatch] = React.useState(null);
@@ -48,7 +64,7 @@ function InsightsScreen({ go, data }) {
 
       {/* stat row */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 9, marginBottom: 14 }}>
-        {[['7-day avg', fmt(avg), 'kcal'], ['Consistency', '6/7', 'days'], ['Balance', fmt(left), 'left']].map(([l, v, s]) => (
+        {[['7-day avg', fmt(avg), 'kcal'], ['Consistency', consistency, 'days'], ['Balance', fmt(left), 'left']].map(([l, v, s]) => (
           <Card key={l} pad={13}>
             <div style={{ color: t.muted, fontSize: 11, fontWeight: 700 }}>{l}</div>
             <div style={{ color: t.text, fontWeight: 800, fontSize: 19, fontFamily: 'var(--display)', marginTop: 5 }}>{v}</div>
@@ -63,7 +79,7 @@ function InsightsScreen({ go, data }) {
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 120, marginTop: 16 }}>
           {week.map((w, i) => {
             const h = Math.max(4, (w.v / maxV) * 100);
-            const isToday = w.d === 'Th';
+            const isToday = w.isToday;
             return (
               <div key={w.d} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7, height: '100%' }}>
                 <div style={{ flex: 1, width: '100%', display: 'flex', alignItems: 'flex-end' }}>
@@ -141,19 +157,19 @@ function ProfileScreen({ go, data, profile: accountProfile, openTweaks, onLogout
   ];
 
   const profile = {
-    name: accountProfile?.name || 'Alex Rivera',
-    email: accountProfile?.email || 'alex.rivera@gmail.com',
-    weightKg: accountProfile?.weightKg || 72,
-    heightCm: accountProfile?.heightCm || 178,
+    name: accountProfile?.name || 'User',
+    email: accountProfile?.email || 'Not signed in',
+    weightKg: accountProfile?.weightKg || 0,
+    heightCm: accountProfile?.heightCm || 0,
     diet: accountProfile?.diet || 'balanced',
     calorieGoal: accountProfile?.calorieGoal || GOALS.kcal,
-    phone: '+34 676 76 76 67',
+    phone: 'Not linked',
     units: 'Metric · grams / kg'
   };
 
   const exportJSON = () => {
     const payload = {
-      app: 'FoodTrack AI',
+      app: 'static_lab',
       exportedAt: new Date().toISOString(),
       profile,
       goals: { ...GOALS },
@@ -166,7 +182,7 @@ function ProfileScreen({ go, data, profile: accountProfile, openTweaks, onLogout
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `foodtrack-export-${dateKey(0)}.json`;
+      a.download = `static-lab-export-${dateKey(0)}.json`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -230,7 +246,7 @@ function ProfileScreen({ go, data, profile: accountProfile, openTweaks, onLogout
       <Card pad={16} style={{ marginBottom: 14 }}>
         <Eyebrow>Account</Eyebrow>
         <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 0 }}>
-          {[['Phone linked', profile.phone], ['Email', profile.email], ['Weight', `${profile.weightKg} kg`], ['Height', `${profile.heightCm} cm`], ['Diet', profile.diet], ['Daily goal', `${fmt(profile.calorieGoal)} kcal`], ['Units', profile.units], ['Display name', profile.name]].map(([l, v], i, arr) => (
+          {[['Phone linked', profile.phone], ['Email', profile.email], ['Weight', profile.weightKg ? `${profile.weightKg} kg` : 'Not set'], ['Height', profile.heightCm ? `${profile.heightCm} cm` : 'Not set'], ['Diet', profile.diet], ['Daily goal', `${fmt(profile.calorieGoal)} kcal`], ['Units', profile.units], ['Display name', profile.name]].map(([l, v], i, arr) => (
             <div key={l} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 0', borderBottom: i < arr.length - 1 ? `1px solid ${t.line}` : 'none' }}>
               <span style={{ color: t.muted, fontSize: 14 }}>{l}</span>
               <span style={{ color: t.text, fontWeight: 600, fontSize: 14 }}>{v}</span>

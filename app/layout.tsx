@@ -2,15 +2,15 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "FoodTrack AI",
+  title: "static_lab",
   description:
     "Camera-first nutrition tracking — log what you ate, see what changed.",
-  applicationName: "FoodTrack AI",
+  applicationName: "static_lab",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "TrackFood AI",
+    title: "static_lab",
   },
   icons: {
     icon: "/icon.svg",

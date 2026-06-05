@@ -23,7 +23,7 @@ export function DesignFrame({ initialSrc }: DesignFrameProps) {
       data-design-frame
       className="design-frame"
       src={src}
-      title="FoodTrack AI"
+      title="static_lab"
       allow="camera"
     />
   );

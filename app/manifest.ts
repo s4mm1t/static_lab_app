@@ -2,8 +2,8 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "TrackFood AI",
-    short_name: "TrackFood",
+    name: "static_lab",
+    short_name: "static_lab",
     description: "Mobile-first nutrition tracking app.",
     start_url: "/",
     display: "standalone",

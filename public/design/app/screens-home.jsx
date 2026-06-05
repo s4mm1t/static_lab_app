@@ -8,10 +8,10 @@ function TopBar({ left, title, go, showProfile = true, extra }) {
   });
   const initial = (profile.name || 'A').trim().charAt(0).toUpperCase();
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18, background: 'transparent', border: 'none' }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, background: 'transparent', border: 'none' }}>
       <button onClick={() => go && go('home')} style={{ border: 'none', background: 'transparent', padding: 0, display: 'flex', alignItems: 'center', gap: 10, color: t.text, fontFamily: 'inherit' }}>
         {left || <LogoBadge size={34} radius={11} />}
-        <span style={{ color: t.text, fontWeight: 800, fontSize: title ? 18 : 14 }}>{title || 'FoodTrack AI'}</span>
+        <span style={{ color: t.text, fontWeight: 800, fontSize: title ? 18 : 14 }}>{title || 'static_lab'}</span>
       </button>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         {extra}
@@ -30,7 +30,7 @@ function iconBtn(t) {
 }
 
 function todayLabel() {
-  return new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  return deviceDateTimeLabel();
 }
 
 function MacroChips({ totals }) {

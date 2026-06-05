@@ -1,4 +1,4 @@
-// desktop.jsx — FoodTrack AI desktop dashboard (Sauge). Reuses theme.jsx + ui.jsx.
+// desktop.jsx — static_lab desktop dashboard (Sauge). Reuses theme.jsx + ui.jsx.
 // Shell: scaled browser window → sidebar + topbar + routed content.
 
 const FONTS = {
@@ -48,7 +48,7 @@ function Sidebar({ route, go, openTweaks }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '4px 8px 22px' }}>
         <LogoBadge size={38} radius={12} />
         <div style={{ minWidth: 0 }}>
-          <div style={{ color: t.text, fontWeight: 800, fontSize: 15, lineHeight: 1, whiteSpace: 'nowrap' }}>FoodTrack AI</div>
+          <div style={{ color: t.text, fontWeight: 800, fontSize: 15, lineHeight: 1, whiteSpace: 'nowrap' }}>static_lab</div>
           <div style={{ color: t.faint, fontSize: 11, marginTop: 4 }}>Nutrition OS</div>
         </div>
       </div>
@@ -596,4 +596,3 @@ function DesktopApp() {
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<DesktopApp />);
-
