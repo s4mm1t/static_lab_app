@@ -140,9 +140,9 @@ function App() {
                 : screens[route.screen]}
             </Screen>
             {/* bottom nav */}
-            <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 40, paddingBottom: 0,
-              background: `linear-gradient(to top, ${theme.bg} 58%, transparent)`, pointerEvents: 'none' }}>
-              <div style={{ margin: '0 16px', height: 58, borderRadius: 20, background: theme.panel2, border: `1px solid ${theme.line}`,
+            <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 40, paddingBottom: 0,
+              background: `linear-gradient(to top, ${theme.bg} 76%, transparent)`, pointerEvents: 'none' }}>
+              <div style={{ margin: '0 16px', height: 'calc(58px + env(safe-area-inset-bottom, 0px))', boxSizing: 'border-box', paddingBottom: 'env(safe-area-inset-bottom, 0px)', borderRadius: '20px 20px 0 0', background: theme.panel2, border: `1px solid ${theme.line}`, borderBottom: 'none',
                 boxShadow: '0 10px 30px rgba(80,70,40,0.14)', display: 'flex', alignItems: 'center', justifyContent: 'space-around',
                 position: 'relative', pointerEvents: 'auto' }}>
                 {nav.map(n => {
