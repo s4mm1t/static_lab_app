@@ -9,7 +9,8 @@ type DesignFrameProps = {
 };
 
 function versionedDesignSrc(path: string) {
-  return `${path}?v=${DESIGN_ASSET_VERSION}`;
+  const [pathname] = path.split("?");
+  return `${pathname}?v=${DESIGN_ASSET_VERSION}`;
 }
 
 export function DesignFrame({ initialSrc }: DesignFrameProps) {
