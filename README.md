@@ -2,6 +2,8 @@
 
 > **Camera-First Nutrition Tracking** — Log what you eat. See what changed.
 
+Codex handoff for the next reviewer: [CODEX_HANDOFF.md](CODEX_HANDOFF.md)
+
 Transform your meals into intelligent nutritional insights using computer vision and AI-powered analysis.
 
 [![GitHub stars](https://img.shields.io/github/stars/ayesasa13-lang/foodaiproject?style=social)](https://github.com/ayesasa13-lang/foodaiproject)
