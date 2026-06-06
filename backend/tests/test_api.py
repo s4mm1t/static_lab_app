@@ -39,6 +39,11 @@ def test_health_and_foods() -> None:
         assert health.json()["status"] == "ok"
         assert health.json()["products"] >= 5
 
+        status = client.get("/api/v1/status")
+        assert status.status_code == 200
+        assert status.json()["ai_provider_configured"] is False
+        assert status.json()["ai_model"]
+
         foods = client.get("/api/v1/foods")
         assert foods.status_code == 200
         assert len(foods.json()) >= 5
@@ -312,6 +317,9 @@ def test_assistant_can_log_food_without_provider_key() -> None:
         assert meals.status_code == 200
         assert len(meals.json()) == 1
         assert meals.json()[0]["meal_slot"] == "lunch"
+
+        no_action = assistant_food_log_action(user_id, "дай совет для завтрака без добавления в дневник")
+        assert no_action is None
 
 
 def test_assistant_product_context_and_language_cleanup() -> None:

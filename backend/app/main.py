@@ -66,7 +66,12 @@ MAX_BODY_BYTES = 320_000
 MAX_REQUESTS_PER_MINUTE = 160
 AUTH_REQUESTS_PER_MINUTE = 24
 INTRUDER_BLOCK_THRESHOLD = 5
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_API_KEY = (
+    os.getenv("GEMINI_API_KEY")
+    or os.getenv("GOOGLE_API_KEY")
+    or os.getenv("GOOGLE_GENERATIVE_AI_API_KEY")
+    or ""
+)
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 AGENT_INSTRUCTIONS_PATH = Path(os.getenv("AGENT_INSTRUCTIONS_PATH", str(PROJECT_ROOT / "AGENTS.md")))
 DEFAULT_ALLOWED_HOSTS = "localhost,127.0.0.1,testserver,backend,frontend,*.orb.local,*.vercel.app"
@@ -258,6 +263,8 @@ class AppStatusResponse(BaseModel):
     docs_url: str
     storage: str
     products: int
+    ai_provider_configured: bool
+    ai_model: str
     security: list[str]
 
 
@@ -3282,6 +3289,22 @@ def clean_food_log_query(message: str) -> str:
 
 def is_food_log_request(message: str) -> bool:
     lowered = message.lower()
+    negative_action_markers = (
+        "без добав",
+        "не добав",
+        "ничего не добав",
+        "без записи",
+        "не запис",
+        "do not add",
+        "don't add",
+        "without adding",
+        "no lo añadas",
+        "sin añadir",
+        "sin agregar",
+    )
+    if any(marker in lowered for marker in negative_action_markers):
+        return False
+
     markers = (
         "add",
         "log",
@@ -3769,6 +3792,8 @@ def app_status() -> AppStatusResponse:
         docs_url="/docs",
         storage="memory" if USE_MEMORY_STORAGE else "postgres",
         products=count_foods(),
+        ai_provider_configured=bool(GEMINI_API_KEY),
+        ai_model=GEMINI_MODEL,
         security=[
             "strict CORS",
             "trusted hosts",
