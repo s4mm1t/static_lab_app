@@ -1,7 +1,7 @@
 import { headers } from "next/headers";
 import { DesignFrame } from "./design-frame";
 
-const DESIGN_ASSET_VERSION = "navdock-20260605-2";
+const DESIGN_ASSET_VERSION = "navdock-20260606-1";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";

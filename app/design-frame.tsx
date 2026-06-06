@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-const DESIGN_ASSET_VERSION = "navdock-20260605-2";
+const DESIGN_ASSET_VERSION = "navdock-20260606-1";
 
 type DesignFrameProps = {
   initialSrc: string;
