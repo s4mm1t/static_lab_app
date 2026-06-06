@@ -140,17 +140,17 @@ function App() {
                 : screens[route.screen]}
             </Screen>
             {/* bottom nav */}
-            <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 40, paddingBottom: 0,
-              background: `linear-gradient(to top, ${theme.bg} 76%, transparent)`, pointerEvents: 'none' }}>
-              <div style={{ margin: '0 16px', height: 58, boxSizing: 'border-box', paddingBottom: 0, borderRadius: '20px 20px 0 0', background: theme.panel2, border: `1px solid ${theme.line}`, borderBottom: 'none',
-                boxShadow: '0 10px 30px rgba(80,70,40,0.14)', display: 'flex', alignItems: 'center', justifyContent: 'space-around',
+            <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, height: 0, zIndex: 40, paddingBottom: 0,
+              background: 'transparent', pointerEvents: 'none', overflow: 'visible' }}>
+              <div style={{ margin: '0 16px', height: 0, boxSizing: 'border-box', paddingBottom: 0, borderRadius: 0, background: 'transparent', border: 'none',
+                boxShadow: 'none', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-around',
                 position: 'relative', pointerEvents: 'auto' }}>
                 {nav.map(n => {
                   if (n.fab) {
                     const on = route.screen === 'add';
                     return (
                       <button key={n.id} onClick={() => triggerAdd(route.params.mealId || 'breakfast')} style={{
-                        width: 52, height: 52, borderRadius: 17, border: 'none', cursor: 'pointer', marginTop: -18,
+                        width: 52, height: 52, borderRadius: 17, border: 'none', cursor: 'pointer', marginTop: 0,
                         background: theme.accent, color: theme.accentOn, display: 'flex', alignItems: 'center', justifyContent: 'center',
                         boxShadow: `0 8px 24px ${theme.accentGlow}, 0 0 0 5px ${theme.bg}`,
                         transform: fabPulse ? 'translateY(-2px) scale(1.08)' : on ? 'scale(1.04)' : 'scale(1)',
