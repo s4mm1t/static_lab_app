@@ -1,7 +1,7 @@
 [project]
-name = "trackfoodai-backend"
+name = "static-lab-backend"
 version = "1.0.0"
-description = "FastAPI backend for TrackFood AI."
+description = "FastAPI backend for static_lab."
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115.0",

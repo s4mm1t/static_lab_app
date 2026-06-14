@@ -56,7 +56,7 @@ services:
   backend:
     build:
       context: ./backend
-    container_name: trackfoodai-backend
+    container_name: static-lab-backend
     environment:
       APP_ENV: local
       DATABASE_URL: postgresql://trackfoodai:trackfoodai@db:5432/trackfoodai
@@ -64,14 +64,14 @@ services:
       ASSISTANT_DATABASE_URL: postgresql://trackfoodai:trackfoodai@assistant_db:5432/trackfoodai_assistant
       EXTERNAL_PRODUCTS_SQLITE: /external-db/Combined.sqlite
       SECRET_KEY: trackfoodai-local-docker-secret-change-me
-      TRACKFOODAI_ADMIN_EMAILS: "${TRACKFOODAI_ADMIN_EMAILS:-}"
+      STATIC_LAB_ADMIN_EMAILS: "${STATIC_LAB_ADMIN_EMAILS:-}"
       GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
       GEMINI_MODEL: "${GEMINI_MODEL:-gemini-2.5-flash-lite}"
       ALLOWED_HOSTS: "localhost,127.0.0.1,testserver,backend,frontend,*.orb.local,192.168.18.40,192.168.18.87,192.168.18.123"
       CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000,http://192.168.18.40:3000,http://192.168.18.87:3000,http://192.168.18.123:3000"
       CORS_ORIGIN_REGEX: "https?://(localhost|127\\.0\\.0\\.1|192\\.168\\.\\d{1,3}\\.\\d{1,3}):3000"
     volumes:
-      - "${TRACKFOODAI_PRODUCT_DB_DIR:-/Volumes/NEYKA SSD/db for foodtrack_app/newbd/Combine (full)}:/external-db:ro"
+      - "${STATIC_LAB_PRODUCT_DB_DIR:-/Volumes/NEYKA SSD/db for static_lab/newbd/Combine (full)}:/external-db:ro"
     ports:
       - "8000:8000"
     depends_on:

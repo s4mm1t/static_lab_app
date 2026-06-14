@@ -1,6 +1,6 @@
-# TrackFood AI Backend
+# static_lab Backend
 
-FastAPI app service for TrackFood AI.
+FastAPI app service for static_lab.
 
 ## Local
 

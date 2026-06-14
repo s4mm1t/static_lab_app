@@ -171,13 +171,35 @@ function hydrateLog(rows) {
   }).filter(Boolean);
 }
 
+function clientTimezoneHeader() {
+  return deviceTimezone();
+}
+
+function sameLocalDay(item, key) {
+  return item?.day === key || item?.date === key || item?.loggedDate === key;
+}
+
 // ── App data store (lifted state, isolated per account) ───────────────
 function useAppData(accountId = 'guest') {
   const dataKey = accountStorageId(accountId);
   const loadLog = React.useCallback(() => hydrateLog(storedJSON(accountStorageKey(dataKey, 'log'), [])), [dataKey]);
   const loadPlans = React.useCallback(() => storedJSON(accountStorageKey(dataKey, 'plans'), []), [dataKey]);
+  const [todayKey, setTodayKey] = React.useState(() => dateKey(0));
   const [log, setLog] = React.useState(loadLog);
   const [plans, setPlans] = React.useState(loadPlans);
+
+  React.useEffect(() => {
+    let timer;
+    const syncDay = () => {
+      const now = deviceNow();
+      setTodayKey(dateKeyFromDate(now));
+      const midnight = new Date(now);
+      midnight.setHours(24, 0, 2, 0);
+      timer = setTimeout(syncDay, Math.max(midnight.getTime() - now.getTime(), 1000));
+    };
+    syncDay();
+    return () => clearTimeout(timer);
+  }, []);
 
   React.useEffect(() => {
     setLog(loadLog());
@@ -194,7 +216,14 @@ function useAppData(accountId = 'guest') {
 
   const addFood = (food, mealId, amountG) => {
     const prepared = amountG ? scaleFoodPortion(food, amountG) : { ...food };
-    setLog(l => [...l, { uid: 'u' + Date.now() + Math.random().toString(36).slice(2,6), food: prepared, mealId, time: nowTime() }]);
+    setLog(l => [...l, {
+      uid: 'u' + Date.now() + Math.random().toString(36).slice(2,6),
+      food: prepared,
+      mealId,
+      time: nowTime(),
+      day: todayKey,
+      timezone: clientTimezoneHeader(),
+    }]);
   };
   const updateFoodAmount = (uid, amountG) => {
     setLog(l => l.map(item => {
@@ -214,8 +243,9 @@ function useAppData(accountId = 'guest') {
     );
     return exists ? ps : [...ps, { ...p, id: 'p' + Date.now() }];
   });
-  const totals = totalsFromLog(log);
-  return { accountId: dataKey, log, totals, addFood, updateFoodAmount, removeFood, plans, addPlan };
+  const todaysLog = React.useMemo(() => log.filter(item => sameLocalDay(item, todayKey)), [log, todayKey]);
+  const totals = totalsFromLog(todaysLog);
+  return { accountId: dataKey, log: todaysLog, allLog: log, todayKey, totals, addFood, updateFoodAmount, removeFood, plans, addPlan };
 }
 
 function deviceNow() {
@@ -298,5 +328,5 @@ Object.assign(window, {
   ThemeCtx, useTheme, makeTheme, fmt, eur, scaleFoodPortion, totalsFromLog, useAppData, dateKey, dateKeyFromDate,
   deviceNow, deviceTimezone, deviceDateTimeLabel, weekDaysMondayFirst, nowTime,
   storedJSON, accountStorageKey, accountStorageId,
-  normalizeLookupText, foodMatchesQuery, findFoodInText, trackfoodApiBase,
+  normalizeLookupText, foodMatchesQuery, findFoodInText, trackfoodApiBase, clientTimezoneHeader,
 });

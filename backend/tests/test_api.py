@@ -4,7 +4,7 @@ import os
 
 os.environ["DATABASE_URL"] = "memory://test"
 os.environ["SECRET_KEY"] = "trackfoodai-test-secret-with-enough-length"
-os.environ["TRACKFOODAI_ADMIN_EMAILS"] = "admin@example.com"
+os.environ["STATIC_LAB_ADMIN_EMAILS"] = "admin@example.com"
 os.environ["GEMINI_API_KEY"] = ""
 
 from fastapi.testclient import TestClient

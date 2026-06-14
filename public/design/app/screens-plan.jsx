@@ -200,7 +200,7 @@ function CoachScreen({ go, data, profile, addFood, addPlan, notify }) {
     try {
       const res = await fetch(`${trackfoodApiBase()}/api/v1/assistant/messages`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'X-Client-Timezone': clientTimezoneHeader() },
         body: JSON.stringify({ message: text, client_context: clientContext() }),
       });
       const payload = await res.json().catch(() => ({}));

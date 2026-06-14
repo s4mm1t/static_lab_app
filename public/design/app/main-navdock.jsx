@@ -140,17 +140,18 @@ function App() {
                 : screens[route.screen]}
             </Screen>
             {/* bottom nav */}
-            <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, height: 0, zIndex: 40, paddingBottom: 0,
-              background: 'transparent', pointerEvents: 'none', overflow: 'visible' }}>
-              <div style={{ margin: '0 16px', height: 0, boxSizing: 'border-box', paddingBottom: 0, borderRadius: 0, background: 'transparent', border: 'none',
-                boxShadow: 'none', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-around',
-                position: 'relative', pointerEvents: 'auto' }}>
+            <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, height: 66, zIndex: 40, paddingBottom: 0,
+              background: theme.panel2, borderTop: `1px solid ${theme.line}`, boxShadow: '0 -12px 34px rgba(80,70,40,0.14)',
+              pointerEvents: 'none', overflow: 'visible' }}>
+              <div style={{ margin: '0 16px', height: 58, boxSizing: 'border-box', paddingBottom: 0, borderRadius: '20px 20px 0 0', background: theme.panel2, border: `1px solid ${theme.line}`, borderBottom: 'none',
+                boxShadow: '0 -8px 24px rgba(80,70,40,0.10)', display: 'flex', alignItems: 'center', justifyContent: 'space-around',
+                position: 'absolute', left: 0, right: 0, bottom: 0, pointerEvents: 'auto' }}>
                 {nav.map(n => {
                   if (n.fab) {
                     const on = route.screen === 'add';
                     return (
                       <button key={n.id} onClick={() => triggerAdd(route.params.mealId || 'breakfast')} style={{
-                        width: 52, height: 52, borderRadius: 17, border: 'none', cursor: 'pointer', marginTop: 0,
+                        width: 52, height: 52, borderRadius: 17, border: 'none', cursor: 'pointer', marginTop: -10,
                         background: theme.accent, color: theme.accentOn, display: 'flex', alignItems: 'center', justifyContent: 'center',
                         boxShadow: `0 8px 24px ${theme.accentGlow}, 0 0 0 5px ${theme.bg}`,
                         transform: fabPulse ? 'translateY(-2px) scale(1.08)' : on ? 'scale(1.04)' : 'scale(1)',
@@ -169,7 +170,7 @@ function App() {
                   return (
                     <button key={n.id} onClick={() => go(n.id)} style={{
                       background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column',
-                      alignItems: 'center', gap: 3, padding: '6px 8px', flex: 1, color: on ? theme.accent : theme.faint, transition: 'color .2s' }}>
+                      alignItems: 'center', gap: 3, padding: '6px 8px 4px', flex: 1, color: on ? theme.accent : theme.faint, transition: 'color .2s' }}>
                       <Icon name={n.icon} size={22} stroke={on ? 2.5 : 2} />
                       <span style={{ fontSize: 10, fontWeight: 700 }}>{n.label}</span>
                     </button>
@@ -200,7 +201,7 @@ function Screen({ children, routeKey, motion, isCoach }) {
   return (
     <div key={routeKey} style={{
       position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden',
-      padding: 'max(6px, calc(env(safe-area-inset-top, 0px) - 18px)) calc(18px + env(safe-area-inset-right, 0px)) 82px calc(18px + env(safe-area-inset-left, 0px))',
+      padding: 'max(6px, calc(env(safe-area-inset-top, 0px) - 18px)) calc(18px + env(safe-area-inset-right, 0px)) 68px calc(18px + env(safe-area-inset-left, 0px))',
       display: isCoach ? 'flex' : 'block', flexDirection: 'column',
       opacity: 1,
       transform: shown ? 'none' : 'translateY(14px) scale(.985)',
@@ -417,7 +418,7 @@ async function syncBackendAuth(mode, form, profile) {
   const postAuth = async (targetPath, body) => {
     const response = await fetch(`${base}${targetPath}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Client-Timezone': clientTimezoneHeader() },
       body: JSON.stringify(body),
     });
     const data = await response.json().catch(() => ({}));

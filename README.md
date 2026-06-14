@@ -1,4 +1,4 @@
-# 🥗 FoodTrack AI
+# static_lab
 
 > **Camera-First Nutrition Tracking** — Log what you eat. See what changed.
 
@@ -196,4 +196,4 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 **Made with ❤️ for better nutrition and healthier living.**
 
-[⬆ Back to top](#-foodtrack-ai)
+[Back to top](#static_lab)

@@ -1,7 +1,8 @@
 import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 import { DesignFrame } from "./design-frame";
 
-const DESIGN_ASSET_VERSION = "navdock-20260606-2";
+const DESIGN_ASSET_VERSION = "navdock-20260614-1";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -10,7 +11,16 @@ function versionedDesignSrc(path: string) {
   return `${path}?v=${DESIGN_ASSET_VERSION}`;
 }
 
-export default async function Home() {
+type HomeProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function Home({ searchParams }: HomeProps) {
+  const params = (await searchParams) ?? {};
+  if (Object.keys(params).length > 0) {
+    redirect("/");
+  }
+
   const h = await headers();
   const ua = h.get("user-agent") || "";
   const isMobile = /iPhone|iPad|iPod|Android|Mobile|Windows Phone/i.test(ua);

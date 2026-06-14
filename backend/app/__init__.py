@@ -1,1 +1,1 @@
-"""TrackFood AI backend package."""
+"""static_lab backend package."""

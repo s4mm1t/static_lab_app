@@ -88,7 +88,7 @@ DEFAULT_CORS_ORIGIN_REGEX = (
 )
 ADMIN_EMAILS = {
     email.strip().lower()
-    for email in os.getenv("TRACKFOODAI_ADMIN_EMAILS", "").split(",")
+    for email in (os.getenv("STATIC_LAB_ADMIN_EMAILS") or os.getenv("TRACKFOODAI_ADMIN_EMAILS", "")).split(",")
     if email.strip()
 }
 RATE_BUCKETS: dict[str, deque[float]] = defaultdict(deque)
@@ -114,6 +114,25 @@ def app_now() -> datetime:
         return datetime.now(ZoneInfo(APP_TIMEZONE))
     except Exception:
         return datetime.now(timezone.utc)
+
+
+def safe_timezone(value: str | None = None) -> ZoneInfo | timezone:
+    for candidate in (value, APP_TIMEZONE, "UTC"):
+        if not candidate:
+            continue
+        try:
+            return ZoneInfo(candidate)
+        except Exception:
+            continue
+    return timezone.utc
+
+
+def request_timezone(request: Request) -> ZoneInfo | timezone:
+    return safe_timezone(request.headers.get("x-client-timezone"))
+
+
+def request_today(request: Request) -> date:
+    return datetime.now(request_timezone(request)).date()
 
 
 def now_iso() -> str:
@@ -2014,7 +2033,11 @@ def is_local_dev_request(request: Request) -> bool:
 
 
 def request_fingerprint(request: Request) -> str:
-    explicit = request.headers.get("x-trackfood-fingerprint") or request.headers.get("x-station-id")
+    explicit = (
+        request.headers.get("x-static-lab-fingerprint")
+        or request.headers.get("x-trackfood-fingerprint")
+        or request.headers.get("x-station-id")
+    )
     if explicit:
         return normalize_text(explicit)[:160]
     user_agent = request.headers.get("user-agent", "unknown")
@@ -2606,8 +2629,15 @@ def sanitize_assistant_reply(text: str) -> str:
     return cleaned.strip()
 
 
-def local_day_key(value: str) -> str:
-    return value[:10]
+def local_day_key(value: str, tz: ZoneInfo | timezone | None = None) -> str:
+    zone = tz or safe_timezone()
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return str(value)[:10]
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(zone).date().isoformat()
 
 
 def format_product_context_line(food: FoodItem) -> str:
@@ -2718,12 +2748,13 @@ def assistant_relevant_products_context(message: str) -> str:
     return "\n".join(lines)
 
 
-def build_assistant_app_context(user: dict[str, Any]) -> str:
+def build_assistant_app_context(user: dict[str, Any], tz: ZoneInfo | timezone | None = None) -> str:
     user_id = str(user["id"])
-    today = app_now().date()
+    zone = tz or safe_timezone()
+    today = datetime.now(zone).date()
     tomorrow = today + timedelta(days=1)
     meals = list_meals_for_user(user_id)
-    today_meals = [meal for meal in meals if local_day_key(meal.logged_at) == today.isoformat()]
+    today_meals = [meal for meal in meals if local_day_key(meal.logged_at, zone) == today.isoformat()]
     upcoming_events = list_calendar_events_for_user(user_id, today, today + timedelta(days=14))
     lessons = list_ai_lessons_for_user(user_id)
 
@@ -2868,6 +2899,7 @@ def assistant_balance_reply(
     user: dict[str, Any],
     message: str,
     client_context: str | None = None,
+    tz: ZoneInfo | timezone | None = None,
 ) -> str | None:
     lowered = message.lower()
     markers = (
@@ -2893,11 +2925,12 @@ def assistant_balance_reply(
     fat = parse_client_number(r"fat\s*([0-9, ]+)g", client_context)
 
     if logged is None or remaining is None:
-        today = app_now().date()
+        zone = tz or safe_timezone()
+        today = datetime.now(zone).date()
         today_meals = [
             meal
             for meal in list_meals_for_user(str(user["id"]))
-            if local_day_key(meal.logged_at) == today.isoformat()
+            if local_day_key(meal.logged_at, zone) == today.isoformat()
         ]
         logged = sum(meal.calories for meal in today_meals)
         remaining = max(int(user["calorie_goal"]) - logged, 0)
@@ -3655,7 +3688,7 @@ app.add_middleware(
     allow_origin_regex=os.getenv("CORS_ORIGIN_REGEX", DEFAULT_CORS_ORIGIN_REGEX),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "X-Client-Timezone"],
 )
 
 
@@ -3708,6 +3741,11 @@ async def harden_requests(request: Request, call_next):
             request,
             details="Suspicious request signature detected",
         )
+        if not is_local_dev_request(request):
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"detail": "Unsafe request rejected"},
+            )
 
     client = request_ip(request)
     key = f"{client}:{request.url.path}"
@@ -3745,12 +3783,20 @@ async def harden_requests(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["Permissions-Policy"] = "camera=(self), microphone=(), geolocation=()"
+    response.headers["Permissions-Policy"] = (
+        "camera=(self), microphone=(), geolocation=(), payment=(), usb=(), bluetooth=(), browsing-topics=()"
+    )
+    response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    response.headers["X-DNS-Prefetch-Control"] = "off"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
         "img-src 'self' data: https://fastapi.tiangolo.com; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
         "frame-ancestors 'none'"
     )
     return response
@@ -3909,9 +3955,16 @@ def update_profile(
 
 @app.get("/api/v1/profile/stats", response_model=ProfileStatsResponse, tags=["Profile"])
 def get_profile_stats(
+    request: Request,
     user: dict[str, Any] = Depends(get_current_user),
 ) -> ProfileStatsResponse:
-    meals = list_meals_for_user(str(user["id"]))
+    zone = request_timezone(request)
+    today = request_today(request).isoformat()
+    meals = [
+        meal
+        for meal in list_meals_for_user(str(user["id"]))
+        if local_day_key(meal.logged_at, zone) == today
+    ]
     calories_logged = sum(meal.calories for meal in meals)
 
     return ProfileStatsResponse(
@@ -4001,6 +4054,7 @@ def create_assistant_message(
     user: dict[str, Any] = Depends(get_current_user),
 ) -> AssistantMessageResponse:
     user_id = str(user["id"])
+    zone = request_timezone(request)
     context = get_assistant_context_for_user(user_id, payload.context_id)
     existing = list_assistant_messages_for_user(user_id, context_id=context.id)
     user_message = create_assistant_message_for_user(user_id, context.id, "user", payload.message)
@@ -4016,20 +4070,20 @@ def create_assistant_message(
             context.id,
             "assistant",
             action_reply,
-            provider="trackfoodai",
+            provider="static_lab",
             model="safe-action-router",
         )
         log_security_event("assistant_safe_refusal", "info", request, user_id, "Unsafe app request refused")
         return assistant_message
 
-    balance_reply = assistant_balance_reply(user, payload.message, payload.client_context)
+    balance_reply = assistant_balance_reply(user, payload.message, payload.client_context, zone)
     if balance_reply:
         assistant_message = create_assistant_message_for_user(
             user_id,
             context.id,
             "assistant",
             balance_reply,
-            provider="trackfoodai",
+            provider="static_lab",
             model="safe-action-router",
         )
         log_security_event("assistant_balance_action", "info", request, user_id, "Assistant balance handled")
@@ -4042,7 +4096,7 @@ def create_assistant_message(
             context.id,
             "assistant",
             previous_suggestion_reply,
-            provider="trackfoodai",
+            provider="static_lab",
             model="safe-action-router",
         )
         log_security_event("assistant_previous_suggestion_action", "info", request, user_id, "Assistant previous suggestion handled")
@@ -4055,7 +4109,7 @@ def create_assistant_message(
             context.id,
             "assistant",
             food_action_reply,
-            provider="trackfoodai",
+            provider="static_lab",
             model="safe-action-router",
         )
         log_security_event("assistant_food_action", "info", request, user_id, "Assistant food action handled")
@@ -4071,7 +4125,7 @@ def create_assistant_message(
             context.id,
             "assistant",
             action_reply,
-            provider="trackfoodai",
+            provider="static_lab",
             model="safe-action-router",
         )
         log_security_event("assistant_calendar_action", "info", request, user_id, "Assistant calendar action handled")
@@ -4082,7 +4136,7 @@ def create_assistant_message(
         "\n\n".join(
             part
             for part in (
-                build_assistant_app_context(user),
+                build_assistant_app_context(user, zone),
                 f"Live client UI context from the current device:\n{payload.client_context}" if payload.client_context else "",
                 assistant_relevant_products_context(payload.message),
                 f"Latest user message language: {assistant_language(payload.message)}. Keep the entire reply in that language, including section labels and final action line.",
@@ -4093,7 +4147,7 @@ def create_assistant_message(
     )
     reply = localize_assistant_reply(reply, assistant_language(payload.message))
     if is_canned_assistant_reply(reply):
-        reply = assistant_balance_reply(user, payload.message, payload.client_context) or (
+        reply = assistant_balance_reply(user, payload.message, payload.client_context, zone) or (
             "Не буду отвечать общей заготовкой. Напиши конкретнее: продукт, граммовку, цель или действие в календаре."
             if assistant_language(payload.message) == "ru"
             else "I will not answer with a canned template. Send a product, grams, goal, or calendar action."

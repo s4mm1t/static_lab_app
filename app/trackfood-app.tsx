@@ -342,6 +342,14 @@ function dateKeyFromIso(value: string) {
   return dateKey(new Date(value));
 }
 
+function clientTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
 function addDays(date: Date, days: number) {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
@@ -521,6 +529,7 @@ async function apiRequest<T>(
     ...options,
     headers: {
       "Content-Type": "application/json",
+      "X-Client-Timezone": clientTimezone(),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     },
@@ -663,7 +672,7 @@ function AvatarBubble({
         // eslint-disable-next-line @next/next/no-img-element
         <img src={profile.avatar_data_url} alt="" />
       ) : (
-        <span>{safeInitials(profile?.name || "TrackFood") || "TF"}</span>
+        <span>{safeInitials(profile?.name || "static_lab") || "SL"}</span>
       )}
     </span>
   );
@@ -1020,7 +1029,7 @@ function AuthFormCard({
             onChange={(event) =>
               onAuthFormChange((current) => ({ ...current, email: event.target.value }))
             }
-            placeholder="nika@trackfood.ai"
+            placeholder="nika@static-lab.app"
           />
         </label>
         <label>
@@ -1193,7 +1202,7 @@ function BottomNav({
   );
 }
 
-export default function TrackFoodApp() {
+export default function StaticLabApp() {
   const barcodeVideoRef = useRef<HTMLVideoElement | null>(null);
   const barcodeStreamRef = useRef<MediaStream | null>(null);
   const [theme, setTheme] = useState<Theme>("dark");
@@ -2112,7 +2121,7 @@ export default function TrackFoodApp() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "trackfood-ai-account-export.json";
+    link.download = "static-lab-account-export.json";
     link.click();
     URL.revokeObjectURL(url);
   }
