@@ -362,6 +362,33 @@ def test_assistant_fallback_answers_workout_request_in_user_language() -> None:
         assert "what to do now" not in content
 
 
+def test_assistant_balance_router_does_not_intercept_food_advice() -> None:
+    user = {
+        "id": "router-user",
+        "name": "Router User",
+        "email": "router@example.com",
+        "calorie_goal": 2100,
+        "activity_level": "active",
+        "diet_type": "muscle",
+    }
+    context = (
+        "Today totals in mobile UI: 185 kcal, protein 14g, carbs 22g, fat 5g\n"
+        "Today remaining in mobile UI: 1915 kcal\n"
+        "goal 2100 kcal"
+    )
+
+    assert main.assistant_balance_reply(
+        user,
+        "что мне съесть после тренировки на 500 калорий",
+        context,
+    ) is None
+    assert main.assistant_balance_reply(
+        user,
+        "сколько калорий осталось сегодня?",
+        context,
+    ) is not None
+
+
 def test_assistant_system_parts_include_agents_md(monkeypatch, tmp_path) -> None:
     agent_file = tmp_path / "AGENTS.md"
     agent_file.write_text("SPECIAL AGENT RULE", encoding="utf-8")

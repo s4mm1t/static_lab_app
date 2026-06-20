@@ -3297,19 +3297,44 @@ def assistant_balance_reply(
     tz: ZoneInfo | timezone | None = None,
 ) -> str | None:
     lowered = message.lower()
-    markers = (
+    advice_markers = (
+        "что съесть",
+        "что поесть",
+        "подбери",
+        "посоветуй",
+        "составь",
+        "план питания",
+        "после трен",
+        "после зала",
+        "what should i eat",
+        "what to eat",
+        "meal idea",
+        "build a meal",
+        "food plan",
+        "after workout",
+        "post workout",
+        "qué como",
+        "que como",
+        "qué comer",
+        "que comer",
+        "recomienda",
+        "después de entrenar",
+        "despues de entrenar",
+    )
+    explicit_balance_markers = (
         "сколько",
         "осталось",
-        "калор",
         "баланс",
         "left",
         "remaining",
         "balance",
-        "calorie",
-        "calorías",
         "quedan",
     )
-    if not any(marker in lowered for marker in markers):
+    if any(marker in lowered for marker in advice_markers) and not any(
+        marker in lowered for marker in ("сколько осталось", "how much", "how many", "cuánto", "cuanto")
+    ):
+        return None
+    if not any(marker in lowered for marker in explicit_balance_markers):
         return None
 
     language = assistant_language(message)
