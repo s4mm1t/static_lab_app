@@ -55,12 +55,12 @@ ASSISTANT_DATABASE_URL = os.getenv("ASSISTANT_DATABASE_URL", DATABASE_URL)
 EXTERNAL_PRODUCTS_SQLITE = os.getenv("EXTERNAL_PRODUCTS_SQLITE", "")
 EXTERNAL_PRODUCTS_LIMIT = int(os.getenv("EXTERNAL_PRODUCTS_LIMIT", "30000"))
 EXTERNAL_PRODUCTS_REFRESH = os.getenv("EXTERNAL_PRODUCTS_REFRESH", "false").lower() == "true"
-APP_ENV = os.getenv("APP_ENV", "local")
+IS_VERCEL_DEPLOY = bool(os.getenv("VERCEL"))
+APP_ENV = os.getenv("APP_ENV") or ("production" if IS_VERCEL_DEPLOY else "local")
 APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Europe/Madrid")
 USE_MEMORY_STORAGE = DATABASE_URL.startswith("memory://")
 USE_MEMORY_PLANNER = USE_MEMORY_STORAGE or PLANNER_DATABASE_URL.startswith("memory://")
 USE_MEMORY_ASSISTANT = USE_MEMORY_STORAGE or ASSISTANT_DATABASE_URL.startswith("memory://")
-IS_VERCEL_DEPLOY = bool(os.getenv("VERCEL"))
 REQUIRE_PERSISTENT_STORAGE = os.getenv("STATIC_LAB_REQUIRE_PERSISTENT_STORAGE", "false").lower() == "true"
 SECRET_KEY = os.getenv("SECRET_KEY", "trackfoodai-local-dev-secret-change-me")
 JWT_ALGORITHM = "HS256"
@@ -300,6 +300,9 @@ class AppStatusResponse(BaseModel):
     name: str
     version: str
     environment: str
+    deployment_platform: str
+    deployment_commit: str | None = None
+    deployment_url: str | None = None
     docs_url: str
     storage: str
     products: int
@@ -4125,7 +4128,10 @@ def app_status() -> AppStatusResponse:
     return AppStatusResponse(
         name="static_lab",
         version="1.1.0",
-        environment=os.getenv("APP_ENV", "local"),
+        environment=APP_ENV,
+        deployment_platform="vercel" if IS_VERCEL_DEPLOY else "local",
+        deployment_commit=os.getenv("VERCEL_GIT_COMMIT_SHA"),
+        deployment_url=os.getenv("VERCEL_URL"),
         docs_url="/docs",
         storage="memory" if USE_MEMORY_STORAGE else "postgres",
         products=count_foods(),

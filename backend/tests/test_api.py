@@ -44,6 +44,9 @@ def test_health_and_foods() -> None:
         assert status.status_code == 200
         assert status.json()["ai_provider_configured"] is False
         assert status.json()["ai_model"]
+        assert status.json()["environment"] == "local"
+        assert status.json()["deployment_platform"] == "local"
+        assert status.json()["deployment_commit"] is None
         assert status.json()["deployment_ready"] is False
         assert any("GEMINI_API_KEY" in warning for warning in status.json()["warnings"])
 
