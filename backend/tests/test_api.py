@@ -285,6 +285,41 @@ def test_assistant_falls_back_to_local_context_without_provider_key() -> None:
         assert "1915 kcal" in payload["content"]
 
 
+def test_assistant_fallback_answers_workout_request_in_user_language() -> None:
+    with TestClient(app) as client:
+        register = client.post(
+            "/api/v1/auth/register",
+            json={
+                "name": "Workout User",
+                "email": "workout@example.com",
+                "password": "LocalPass123",
+                "calorie_goal": 2100,
+                "activity_level": "active",
+                "diet_type": "muscle",
+            },
+        )
+        headers = {"Authorization": f"Bearer {register.json()['token']}"}
+        chat = client.post(
+            "/api/v1/assistant/messages",
+            json={
+                "message": "что съесть после тренировки?",
+                "client_context": (
+                    "Today totals in mobile UI: 185 kcal, protein 14g, carbs 22g, fat 5g\n"
+                    "Today remaining in mobile UI: 1915 kcal\n"
+                    "goal 2100 kcal"
+                ),
+            },
+            headers=headers,
+        )
+
+        assert chat.status_code == 200
+        content = chat.json()["content"].lower()
+        assert "после тренировки" in content
+        assert "белок" in content
+        assert "1915 kcal" in content
+        assert "what to do now" not in content
+
+
 def test_assistant_system_parts_include_agents_md(monkeypatch, tmp_path) -> None:
     agent_file = tmp_path / "AGENTS.md"
     agent_file.write_text("SPECIAL AGENT RULE", encoding="utf-8")

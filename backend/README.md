@@ -18,3 +18,18 @@ Tests use the backend's in-memory storage mode:
 ```bash
 DATABASE_URL=memory://test .venv/bin/python -m pytest
 ```
+
+## Smoke Test
+
+With the backend running on port 8000:
+
+```bash
+npm run backend:dev:memory
+npm run smoke:backend
+```
+
+To check production:
+
+```bash
+API_BASE_URL=https://static-lab-app.vercel.app SMOKE_REQUIRE_DEPLOYMENT_READY=true npm run smoke:backend
+```

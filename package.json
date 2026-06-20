@@ -9,7 +9,9 @@
     "lint": "node node_modules/eslint/bin/eslint.js",
     "backend:install": "python3 -m venv backend/.venv && backend/.venv/bin/python -m pip install -r backend/requirements.txt",
     "backend:dev": "cd backend && .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000",
-    "backend:test": "cd backend && .venv/bin/python -m pytest"
+    "backend:dev:memory": "cd backend && DATABASE_URL=memory://local SECRET_KEY=static-lab-local-smoke-secret-with-enough-length GEMINI_API_KEY= .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000",
+    "backend:test": "cd backend && .venv/bin/python -m pytest",
+    "smoke:backend": "node scripts/smoke-backend.mjs"
   },
   "dependencies": {
     "next": "16.2.9",

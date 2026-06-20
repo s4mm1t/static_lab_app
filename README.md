@@ -113,6 +113,7 @@ GEMINI_API_KEY=your_gemini_key_here
 GEMINI_MODEL=gemini-2.5-flash-lite
 ASSISTANT_DATABASE_URL=postgresql://user:password@localhost:5434/trackfoodai_assistant
 SECRET_KEY=your_secret_key_here
+STATIC_LAB_REQUIRE_PERSISTENT_STORAGE=false
 
 # Frontend
 NEXT_PUBLIC_API_URL=http://localhost:8000
@@ -126,13 +127,16 @@ Leave `NEXT_PUBLIC_API_URL` empty on Vercel unless you intentionally use an exte
 Set these Vercel environment variables for production data persistence:
 
 ```env
+APP_ENV=production
 DATABASE_URL=postgresql://user:password@host:5432/trackfoodai
+PLANNER_DATABASE_URL=postgresql://user:password@host:5432/trackfoodai
 ASSISTANT_DATABASE_URL=postgresql://user:password@host:5432/trackfoodai
 SECRET_KEY=long-random-production-secret
 GEMINI_API_KEY=your_gemini_key_here
+STATIC_LAB_REQUIRE_PERSISTENT_STORAGE=true
 ```
 
-If `DATABASE_URL` is missing on Vercel, the API starts in memory mode so auth buttons still respond, but accounts and diary data can disappear after a serverless cold start.
+If `DATABASE_URL` is missing on Vercel and `STATIC_LAB_REQUIRE_PERSISTENT_STORAGE=true`, the backend fails fast instead of silently losing user data. See [PRODUCTION_SETUP.md](PRODUCTION_SETUP.md) for the full production checklist and AI coach smoke tests.
 
 ## 💡 Usage Examples
 

@@ -1137,7 +1137,7 @@ function GuestPreview({
             <div className="guest-preview-row">
               <StatTile label="Demo calories" value="1,420 kcal" detail="today" />
               <StatTile label="Planner" value="4 events" detail="sample day" />
-              <StatTile label="Products" value="24k+" detail="local DB" />
+              <StatTile label="Products" value="Backend" detail="synced search" />
             </div>
           </section>
 

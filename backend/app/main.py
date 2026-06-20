@@ -3630,6 +3630,46 @@ def generate_local_assistant_reply(
     weight = assistant_context_value(app_context, "Weight", "not set")
     height = assistant_context_value(app_context, "Height", "not set")
     products = assistant_context_products(app_context)
+    lowered_latest = latest.lower()
+
+    workout_markers = (
+        "после трен",
+        "после зала",
+        "трениров",
+        "post workout",
+        "after workout",
+        "después de entrenar",
+        "despues de entrenar",
+        "entreno",
+    )
+    if any(marker in lowered_latest for marker in workout_markers):
+        protein_hint = products[0]["name"] if products else "chicken rice bowl"
+        if language == "ru":
+            note = f"{action_note}\n\n" if action_note else ""
+            return sanitize_assistant_reply(
+                f"{note}После тренировки тебе сейчас лучше закрыть белок и часть углеводов, не добивая жиры вслепую. "
+                f"По текущему дневнику: {logged}, осталось {remaining}, режим {diet}.\n\n"
+                f"Практичный вариант: {protein_hint} или похожая порция на 25-40g белка плюс углеводы. "
+                "Если хочешь точный лог, напиши граммовку, например: добавь 150г chicken rice bowl в ужин.\n\n"
+                "Что дальше:\nПришли продукт и граммы, я добавлю в дневник."
+            )
+        if language == "es":
+            note = f"{action_note}\n\n" if action_note else ""
+            return sanitize_assistant_reply(
+                f"{note}Después de entrenar conviene cerrar proteína y algo de carbohidrato sin subir grasa a ciegas. "
+                f"Diario actual: {logged}, quedan {remaining}, dieta {diet}.\n\n"
+                f"Opción práctica: {protein_hint} o una porción parecida con 25-40g de proteína. "
+                "Si quieres registrarlo exacto, escribe los gramos.\n\n"
+                "Qué hacer ahora:\nManda producto y gramos y lo añado al diario."
+            )
+        note = f"{action_note}\n\n" if action_note else ""
+        return sanitize_assistant_reply(
+            f"{note}After training, prioritize protein and some carbs without blindly pushing fats. "
+            f"Current diary: {logged}, remaining {remaining}, diet {diet}.\n\n"
+            f"A practical option: {protein_hint} or a similar portion with 25-40g protein. "
+            "If you want an exact log, send grams.\n\n"
+            "What to do now:\nSend product and grams and I will add it to the diary."
+        )
 
     if products:
         first = products[0]
