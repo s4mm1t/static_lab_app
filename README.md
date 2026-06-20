@@ -112,6 +112,8 @@ DATABASE_URL=postgresql://user:password@localhost:5432/trackfoodai
 GEMINI_API_KEY=your_gemini_key_here
 GEMINI_MODEL=gemini-2.5-flash-lite
 ASSISTANT_DATABASE_URL=postgresql://user:password@localhost:5434/trackfoodai_assistant
+TURSO_DATABASE_URL=libsql://static-lab-products-trackfood-ayesasa13-lang.aws-ap-northeast-1.turso.io
+TURSO_AUTH_TOKEN=your_turso_database_token_here
 SECRET_KEY=your_secret_key_here
 STATIC_LAB_REQUIRE_PERSISTENT_STORAGE=false
 
@@ -131,12 +133,14 @@ APP_ENV=production
 DATABASE_URL=postgresql://user:password@host:5432/trackfoodai
 PLANNER_DATABASE_URL=postgresql://user:password@host:5432/trackfoodai
 ASSISTANT_DATABASE_URL=postgresql://user:password@host:5432/trackfoodai
+TURSO_DATABASE_URL=libsql://static-lab-products-trackfood-ayesasa13-lang.aws-ap-northeast-1.turso.io
+TURSO_AUTH_TOKEN=your_turso_database_token_here
 SECRET_KEY=long-random-production-secret
 GEMINI_API_KEY=your_gemini_key_here
 STATIC_LAB_REQUIRE_PERSISTENT_STORAGE=true
 ```
 
-If `DATABASE_URL` is missing on Vercel and `STATIC_LAB_REQUIRE_PERSISTENT_STORAGE=true`, the backend fails fast instead of silently losing user data. See [PRODUCTION_SETUP.md](PRODUCTION_SETUP.md) for the full production checklist and AI coach smoke tests.
+If `DATABASE_URL` is missing on Vercel and `STATIC_LAB_REQUIRE_PERSISTENT_STORAGE=true`, the backend fails fast instead of silently losing user data. `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` power the remote product catalog; user accounts, diary logs, calendar, and assistant memory still need the Postgres URLs above. See [PRODUCTION_SETUP.md](PRODUCTION_SETUP.md) for the full production checklist and AI coach smoke tests.
 
 ## 💡 Usage Examples
 

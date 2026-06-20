@@ -29,6 +29,7 @@ backend/**/*.pyc
 
 # misc
 /backups/
+/turso-upload/
 .DS_Store
 ._*
 *.pem

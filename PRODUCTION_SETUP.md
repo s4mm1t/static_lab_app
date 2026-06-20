@@ -12,6 +12,8 @@ APP_TIMEZONE=Europe/Madrid
 DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DB?sslmode=require
 PLANNER_DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DB?sslmode=require
 ASSISTANT_DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DB?sslmode=require
+TURSO_DATABASE_URL=libsql://static-lab-products-trackfood-ayesasa13-lang.aws-ap-northeast-1.turso.io
+TURSO_AUTH_TOKEN=<turso database token>
 SECRET_KEY=<long random secret, at least 32 chars>
 GEMINI_API_KEY=<google ai studio key>
 GEMINI_MODEL=gemini-2.5-flash-lite
@@ -79,6 +81,13 @@ The production mode fails if storage is not Postgres, if the AI provider is not 
 
 ## Product Database
 
-The local SQLite file from `STATIC_LAB_PRODUCT_DB_DIR` is not available on Vercel. For production, import normalized products into Postgres and use that database as the source of truth. Runtime mounts of local disks will not work on Vercel.
+The local SQLite file from `STATIC_LAB_PRODUCT_DB_DIR` is not available on Vercel. For production, use the Turso/libSQL product catalog:
 
-Until that import exists, `/api/v1/status` may show a small product count and search quality will be limited.
+```env
+TURSO_DATABASE_URL=libsql://static-lab-products-trackfood-ayesasa13-lang.aws-ap-northeast-1.turso.io
+TURSO_AUTH_TOKEN=<turso database token>
+```
+
+When both variables are set, `/api/v1/foods`, barcode lookup, nutrition estimate, and the coach's product context read from Turso. Diary entries cache the selected Turso product into the app storage before writing meal logs, so Postgres foreign keys keep working.
+
+Turso is only the product catalog in this app. User accounts, diary logs, calendar events, and assistant memory still require `DATABASE_URL`, `PLANNER_DATABASE_URL`, and `ASSISTANT_DATABASE_URL`.

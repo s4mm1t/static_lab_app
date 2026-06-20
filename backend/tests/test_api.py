@@ -9,6 +9,7 @@ os.environ["GEMINI_API_KEY"] = ""
 
 from fastapi.testclient import TestClient
 
+import app.main as main
 from app.main import (
     MEMORY_FOODS,
     MEMORY_USERS_BY_EMAIL,
@@ -69,6 +70,44 @@ def test_health_and_foods() -> None:
 
         missing_barcode = client.get("/api/v1/foods/barcode/000")
         assert missing_barcode.status_code == 404
+
+
+def test_turso_product_source_mapping(monkeypatch) -> None:
+    turso_row = {
+        "id": "alcampo:3544057918",
+        "store": "alcampo",
+        "external_id": "3544057918",
+        "name": "DANONE Yogur con sabor a limón 4 x 120 g",
+        "brand": "DANONE",
+        "image_url": "https://example.com/yogur.jpg",
+        "price": 0.94,
+        "currency": "EUR",
+        "package_subtitle": "4 x 120 g",
+        "calories": 300,
+        "protein": 3,
+        "fat": 2.2,
+        "carbs": 10,
+        "fiber": None,
+        "nutrition_basis": "per 100 g",
+        "nutrition_basis_unit": "g",
+        "breadcrumb_path": "Yogures",
+        "barcode": "8410000000000",
+    }
+
+    def fake_turso_execute(sql: str) -> list[dict[str, object]]:
+        if "COUNT(*)" in sql:
+            return [{"count": 28364}]
+        return [turso_row]
+
+    monkeypatch.setattr(main, "USE_TURSO_PRODUCTS", True)
+    monkeypatch.setattr(main, "turso_execute", fake_turso_execute)
+
+    assert main.count_foods() == 28364
+    foods = main.list_foods_from_storage(q="danone limon", limit=1)
+    assert foods[0].id == "alcampo:3544057918"
+    assert foods[0].source == "turso"
+    assert foods[0].price == 0.94
+    assert main.get_food_by_barcode("8410000000000").name.startswith("Yogur")
 
 
 def test_auth_meal_log_and_delete() -> None:

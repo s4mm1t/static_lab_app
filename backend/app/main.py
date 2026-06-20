@@ -55,12 +55,16 @@ ASSISTANT_DATABASE_URL = os.getenv("ASSISTANT_DATABASE_URL", DATABASE_URL)
 EXTERNAL_PRODUCTS_SQLITE = os.getenv("EXTERNAL_PRODUCTS_SQLITE", "")
 EXTERNAL_PRODUCTS_LIMIT = int(os.getenv("EXTERNAL_PRODUCTS_LIMIT", "30000"))
 EXTERNAL_PRODUCTS_REFRESH = os.getenv("EXTERNAL_PRODUCTS_REFRESH", "false").lower() == "true"
+TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL") or os.getenv("LIBSQL_DATABASE_URL", "")
+TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
+TURSO_PRODUCTS_TIMEOUT = float(os.getenv("TURSO_PRODUCTS_TIMEOUT", "8"))
 IS_VERCEL_DEPLOY = bool(os.getenv("VERCEL"))
 APP_ENV = os.getenv("APP_ENV") or ("production" if IS_VERCEL_DEPLOY else "local")
 APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Europe/Madrid")
 USE_MEMORY_STORAGE = DATABASE_URL.startswith("memory://")
 USE_MEMORY_PLANNER = USE_MEMORY_STORAGE or PLANNER_DATABASE_URL.startswith("memory://")
 USE_MEMORY_ASSISTANT = USE_MEMORY_STORAGE or ASSISTANT_DATABASE_URL.startswith("memory://")
+USE_TURSO_PRODUCTS = bool(TURSO_DATABASE_URL and TURSO_AUTH_TOKEN)
 REQUIRE_PERSISTENT_STORAGE = os.getenv("STATIC_LAB_REQUIRE_PERSISTENT_STORAGE", "false").lower() == "true"
 SECRET_KEY = os.getenv("SECRET_KEY", "trackfoodai-local-dev-secret-change-me")
 JWT_ALGORITHM = "HS256"
@@ -123,6 +127,8 @@ def deployment_warnings() -> list[str]:
         warnings.append("PLANNER_DATABASE_URL is missing; calendar events are not persistent.")
     if IS_VERCEL_DEPLOY and USE_MEMORY_ASSISTANT:
         warnings.append("ASSISTANT_DATABASE_URL is missing; assistant context is not persistent.")
+    if bool(TURSO_DATABASE_URL) != bool(TURSO_AUTH_TOKEN):
+        warnings.append("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be set together for the product database.")
     if not GEMINI_API_KEY:
         warnings.append("GEMINI_API_KEY is missing; assistant uses local fallback instead of the model provider.")
     if SECRET_KEY == "trackfoodai-local-dev-secret-change-me":
@@ -239,6 +245,57 @@ def resolve_external_products_sqlite() -> str:
         if os.path.exists(path):
             return path
     return EXTERNAL_PRODUCTS_SQLITE
+
+
+def turso_http_url() -> str:
+    url = TURSO_DATABASE_URL.strip().rstrip("/")
+    if url.startswith("libsql://"):
+        return f"https://{url.removeprefix('libsql://')}"
+    return url
+
+
+def sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def turso_cell_value(value: dict[str, Any] | None) -> Any:
+    if not value or value.get("type") == "null":
+        return None
+    if value.get("type") == "integer":
+        return int(value.get("value") or 0)
+    if value.get("type") in {"float", "text", "blob"}:
+        return value.get("value")
+    return value.get("value")
+
+
+def turso_execute(sql: str) -> list[dict[str, Any]]:
+    if not USE_TURSO_PRODUCTS:
+        return []
+
+    endpoint = f"{turso_http_url()}/v2/pipeline"
+    response = httpx.post(
+        endpoint,
+        headers={
+            "authorization": f"Bearer {TURSO_AUTH_TOKEN}",
+            "content-type": "application/json",
+        },
+        json={"requests": [{"type": "execute", "stmt": {"sql": sql}}]},
+        timeout=TURSO_PRODUCTS_TIMEOUT,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    result = payload["results"][0]
+    if result.get("type") != "ok":
+        raise RuntimeError(f"Turso query failed: {result}")
+    statement_result = result["response"]["result"]
+    columns = [column["name"] for column in statement_result.get("cols", [])]
+    return [
+        {
+            column: turso_cell_value(row[index])
+            for index, column in enumerate(columns)
+        }
+        for row in statement_result.get("rows", [])
+    ]
 
 
 def query_terms(value: str) -> list[str]:
@@ -1241,7 +1298,216 @@ def import_external_products() -> None:
     sqlite_conn.close()
 
 
+def turso_product_select() -> str:
+    return """
+        SELECT
+            lower(p.store) || ':' || p.external_id AS id,
+            p.store,
+            p.external_id,
+            p.name,
+            p.brand,
+            p.image_url,
+            p.price,
+            p.currency,
+            p.package_subtitle,
+            p.calories,
+            p.protein,
+            p.fat,
+            p.carbs,
+            p.fiber,
+            p.nutrition_basis,
+            p.nutrition_basis_unit,
+            p.breadcrumb_path,
+            (
+              SELECT pb.barcode
+              FROM product_barcodes pb
+              WHERE pb.store = p.store AND pb.product_external_id = p.external_id
+              ORDER BY pb.is_primary DESC
+              LIMIT 1
+            ) AS barcode
+        FROM products p
+    """
+
+
+def turso_food_where() -> str:
+    return """
+        p.name IS NOT NULL
+        AND p.calories IS NOT NULL
+        AND p.calories > 0
+        AND p.is_food = 1
+    """
+
+
+def turso_row_to_food(row: dict[str, Any]) -> FoodItem:
+    brand = normalize_text(row.get("brand") or "") or None
+    store = clean_store(row.get("store"))
+    serving_label = normalize_text(
+        row.get("nutrition_basis")
+        or row.get("package_subtitle")
+        or row.get("nutrition_basis_unit")
+        or "per 100 g"
+    )
+    if serving_label.lower() in {"g", "gr", "gram", "grams", "ml"}:
+        serving_label = f"per 100 {serving_label.lower()}"
+    detail_bits = [bit for bit in [brand, store, serving_label] if bit]
+    return FoodItem(
+        id=str(row["id"]),
+        name=display_food_name(str(row.get("name") or ""), brand, store),
+        detail=" · ".join(detail_bits) or "Product database item",
+        meal="Lunch",
+        image=first_image(row.get("image_url")),
+        calories=max(int(round(float(row.get("calories") or 1))), 1),
+        protein_g=max(int(round(float(row.get("protein") or 0))), 0),
+        carbs_g=max(int(round(float(row.get("carbs") or 0))), 0),
+        fat_g=max(int(round(float(row.get("fat") or 0))), 0),
+        fiber_g=max(int(round(float(row.get("fiber") or 0))), 0),
+        color="#2bb673",
+        brand=brand,
+        store=store,
+        barcode=normalize_text(row.get("barcode") or "") or None,
+        serving_label=serving_label,
+        price=float(row["price"]) if row.get("price") is not None else None,
+        currency=row.get("currency"),
+        source="turso",
+    )
+
+
+def count_turso_foods() -> int:
+    rows = turso_execute(f"SELECT COUNT(*) AS count FROM products p WHERE {turso_food_where()}")
+    return int(rows[0]["count"]) if rows else 0
+
+
+def list_turso_foods(
+    q: str | None = None,
+    store: str | None = None,
+    limit: int = 1000,
+    offset: int = 0,
+) -> list[FoodItem]:
+    cleaned_query = assert_clean(q or "")
+    cleaned_store = assert_clean(store or "")
+    terms = query_terms(cleaned_query)
+    limit = min(max(limit, 1), 1000)
+    offset = max(offset, 0)
+
+    filters = [turso_food_where()]
+    if cleaned_query:
+        search_terms = terms or [cleaned_query.lower()]
+        for term in search_terms:
+            like = sql_literal(f"%{term.lower()}%")
+            filters.append(
+                "("
+                f"lower(p.name) LIKE {like} "
+                f"OR lower(COALESCE(p.brand, '')) LIKE {like} "
+                f"OR lower(COALESCE(p.store, '')) LIKE {like} "
+                f"OR lower(COALESCE(p.breadcrumb_path, '')) LIKE {like} "
+                "OR EXISTS ("
+                "SELECT 1 FROM product_barcodes pb "
+                "WHERE pb.store = p.store "
+                "AND pb.product_external_id = p.external_id "
+                f"AND lower(pb.barcode) LIKE {like}"
+                ")"
+                ")"
+            )
+    if cleaned_store:
+        filters.append(f"lower(p.store) LIKE {sql_literal(f'%{cleaned_store.lower()}%')}")
+
+    order_sql = "CASE WHEN p.image_url IS NOT NULL AND p.image_url <> '' THEN 0 ELSE 1 END, p.name"
+    if cleaned_query:
+        exact = sql_literal(cleaned_query.lower())
+        phrase = sql_literal(f"%{cleaned_query.lower()}%")
+        score_bits = [
+            f"CASE WHEN lower(p.name) = {exact} THEN 60 ELSE 0 END",
+            f"CASE WHEN lower(p.name) LIKE {phrase} THEN 30 ELSE 0 END",
+        ]
+        for term in terms or [cleaned_query.lower()]:
+            like = sql_literal(f"%{term}%")
+            prefix = sql_literal(f"{term}%")
+            score_bits.extend(
+                [
+                    f"CASE WHEN lower(p.name) LIKE {prefix} THEN 20 ELSE 0 END",
+                    f"CASE WHEN lower(p.name) LIKE {like} THEN 10 ELSE 0 END",
+                    f"CASE WHEN lower(COALESCE(p.brand, '')) LIKE {like} THEN 5 ELSE 0 END",
+                    f"CASE WHEN lower(COALESCE(p.store, '')) LIKE {like} THEN 4 ELSE 0 END",
+                ]
+            )
+        order_sql = (
+            f"({' + '.join(score_bits)}) DESC, "
+            "CASE WHEN p.image_url IS NOT NULL AND p.image_url <> '' THEN 0 ELSE 1 END, "
+            "length(p.name), p.name"
+        )
+
+    rows = turso_execute(
+        f"""
+        {turso_product_select()}
+        WHERE {' AND '.join(filters)}
+        ORDER BY {order_sql}
+        LIMIT {limit}
+        OFFSET {offset}
+        """
+    )
+    return [turso_row_to_food(row) for row in rows]
+
+
+def get_turso_food(food_id: str) -> FoodItem | None:
+    cleaned = assert_clean(food_id).lower()
+    if not cleaned:
+        return None
+    rows = turso_execute(
+        f"""
+        {turso_product_select()}
+        WHERE {turso_food_where()}
+          AND lower(p.store || ':' || p.external_id) = {sql_literal(cleaned)}
+        LIMIT 1
+        """
+    )
+    return turso_row_to_food(rows[0]) if rows else None
+
+
+def get_turso_food_by_barcode(barcode: str) -> FoodItem | None:
+    cleaned = assert_clean(barcode).strip().lower()
+    if not cleaned:
+        return None
+    rows = turso_execute(
+        f"""
+        {turso_product_select()}
+        WHERE {turso_food_where()}
+          AND EXISTS (
+            SELECT 1
+            FROM product_barcodes pb
+            WHERE pb.store = p.store
+              AND pb.product_external_id = p.external_id
+              AND lower(pb.barcode) = {sql_literal(cleaned)}
+          )
+        LIMIT 1
+        """
+    )
+    return turso_row_to_food(rows[0]) if rows else None
+
+
+def cache_food_for_meals(food: FoodItem) -> None:
+    if USE_MEMORY_STORAGE:
+        MEMORY_FOODS[food.id] = food
+        return
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            upsert_food(
+                cur,
+                food.model_dump()
+                | {
+                    "source": food.source,
+                    "external_id": food.id,
+                    "category_path": None,
+                },
+            )
+
+
 def count_foods() -> int:
+    if USE_TURSO_PRODUCTS:
+        try:
+            return count_turso_foods()
+        except Exception:
+            pass
     if USE_MEMORY_STORAGE:
         return len(MEMORY_FOODS)
     with connect() as conn:
@@ -1261,6 +1527,12 @@ def list_foods_from_storage(
     terms = query_terms(cleaned_query)
     limit = min(max(limit, 1), 1000)
     offset = max(offset, 0)
+
+    if USE_TURSO_PRODUCTS:
+        try:
+            return list_turso_foods(q=cleaned_query, store=cleaned_store, limit=limit, offset=offset)
+        except Exception:
+            pass
 
     if USE_MEMORY_STORAGE:
         foods = list(MEMORY_FOODS.values())
@@ -1360,6 +1632,14 @@ def list_foods_from_storage(
 
 
 def get_food(food_id: str) -> FoodItem | None:
+    if USE_TURSO_PRODUCTS:
+        try:
+            food = get_turso_food(food_id)
+            if food is not None:
+                return food
+        except Exception:
+            pass
+
     if USE_MEMORY_STORAGE:
         return MEMORY_FOODS.get(food_id)
 
@@ -1374,6 +1654,14 @@ def get_food_by_barcode(barcode: str) -> FoodItem | None:
     cleaned = assert_clean(barcode).strip()
     if not cleaned:
         return None
+
+    if USE_TURSO_PRODUCTS:
+        try:
+            food = get_turso_food_by_barcode(cleaned)
+            if food is not None:
+                return food
+        except Exception:
+            pass
 
     if USE_MEMORY_STORAGE:
         for food in MEMORY_FOODS.values():
@@ -1811,6 +2099,7 @@ def create_meal_for_user(user_id: str, payload: MealCreateRequest) -> MealLogRes
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Food item not found",
         )
+    cache_food_for_meals(food)
 
     meal_id = str(uuid4())
     logged_at = datetime.now(timezone.utc)
@@ -1874,11 +2163,14 @@ def update_meal_for_user(
         return None
 
     updates = payload.model_dump(exclude_unset=True)
-    if "food_id" in updates and updates["food_id"] is not None and get_food(updates["food_id"]) is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Food item not found",
-        )
+    if "food_id" in updates and updates["food_id"] is not None:
+        replacement_food = get_food(updates["food_id"])
+        if replacement_food is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Food item not found",
+            )
+        cache_food_for_meals(replacement_food)
 
     if USE_MEMORY_STORAGE:
         for meal in MEMORY_MEALS_BY_USER[user_id]:
