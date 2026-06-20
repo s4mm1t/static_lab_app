@@ -33,8 +33,11 @@ function useScale(w, h, pad = 48) {
 }
 
 // ── Sidebar ───────────────────────────────────────────────────────────
-function Sidebar({ route, go, openTweaks }) {
+function Sidebar({ route, go, openTweaks, profile }) {
   const t = useTheme();
+  const name = profile?.name || 'Guest profile';
+  const initials = (name.match(/\b\w/g) || ['S']).slice(0, 2).join('').toUpperCase();
+  const goal = profile?.calorieGoal || GOALS.kcal;
   const nav = [
     { id: 'home', icon: 'home', label: 'Home' },
     { id: 'diary', icon: 'diary', label: 'Diary' },
@@ -77,10 +80,10 @@ function Sidebar({ route, go, openTweaks }) {
         </button>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 6px', borderTop: `1px solid ${t.line}`, paddingTop: 14 }}>
           <div style={{ width: 38, height: 38, borderRadius: 12, background: 'linear-gradient(135deg,#dfeee3,#a9cdb9)', display: 'flex',
-            alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 15, color: '#243A2B', flexShrink: 0 }}>P</div>
+            alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 15, color: '#243A2B', flexShrink: 0 }}>{initials}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ color: t.text, fontWeight: 700, fontSize: 13.5 }}>Pi Rodríguez</div>
-            <div style={{ color: t.faint, fontSize: 11.5 }}>Premium · 2,400 kcal</div>
+            <div style={{ color: t.text, fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
+            <div style={{ color: t.faint, fontSize: 11.5 }}>{authToken() ? 'Synced' : 'Local'} · {fmt(goal)} kcal</div>
           </div>
         </div>
       </div>
@@ -371,7 +374,7 @@ function InsightsView({ data }) {
       </div>
       <Panel title="Scanner status">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12 }}>
-          {[['Products', '24K', 'indexed'], ['Estimate', 'Live', 'AI v2'], ['Source', 'DB', 'local + cloud']].map(([l, v, s]) => (
+          {[['Products', 'Backend', 'search'], ['Estimate', 'Vision', 'provider-gated'], ['Source', 'DB', authToken() ? 'synced' : 'local fallback']].map(([l, v, s]) => (
             <div key={l} style={{ background: t.panel2, border: `1px solid ${t.line}`, borderRadius: 14, padding: '14px 16px' }}>
               <div style={{ color: t.muted, fontSize: 11.5, fontWeight: 700 }}>{l}</div>
               <div style={{ color: t.text, fontWeight: 800, fontSize: 20, fontFamily: 'var(--display)', marginTop: 4 }}>{v}</div>
@@ -438,19 +441,63 @@ function PlanView({ data }) {
 }
 
 // ── COACH ─────────────────────────────────────────────────────────────
-function CoachView({ data, addFood, notify }) {
+function CoachView({ data, addFood, notify, profile }) {
   const t = useTheme();
   const [msgs, setMsgs] = React.useState([
-    { who: 'coach', text: "Morning, Pi. You're at 1,232 kcal — about 51% of today's goal. Protein is a touch behind. Want a high-protein snack idea?" },
+    { who: 'coach', text: "I can use your backend diary, plans, and profile when you're logged in. Ask me to log food, plan training, or check today's balance." },
   ]);
   const [val, setVal] = React.useState('');
+  const [sending, setSending] = React.useState(false);
   const chips = ['Calories left today?', 'Log a banana', 'Plan leg day', 'High-protein snack'];
-  const send = (text) => {
+  const clientContext = () => {
+    const meals = (data.allLog || data.log || []).slice(-16).map(item => {
+      const food = item.food;
+      return `${item.day || data.todayKey} ${item.mealId}: ${food?.name || 'food'}, ${food?.quantityG || food?.servingG || 100}g, ${food?.kcal || 0} kcal`;
+    });
+    const plans = (data.plans || []).slice(-16).map(plan => `${plan.date} ${plan.time || ''}: ${plan.title} (${plan.type})`);
+    return [
+      `Profile: ${profile?.name || 'desktop user'}, ${profile?.weightKg || 'not set'}kg, ${profile?.heightCm || 'not set'}cm, diet ${profile?.diet || 'balanced'}, goal ${fmt(GOALS.kcal)} kcal`,
+      `Today totals: ${fmt(data.totals.kcal)} kcal, P${Math.round(data.totals.protein)} C${Math.round(data.totals.carbs)} F${Math.round(data.totals.fat)} Fiber ${Math.round(data.totals.fiber)}`,
+      `Today remaining: ${fmt(Math.max(0, GOALS.kcal - data.totals.kcal))} kcal`,
+      `Meals: ${meals.length ? meals.join('; ') : 'empty'}`,
+      `Plans: ${plans.length ? plans.join('; ') : 'empty'}`,
+      `Timezone: ${clientTimezoneHeader()}`,
+    ].join('\n');
+  };
+  const fallbackReply = (text) => {
+    const low = text.toLowerCase();
+    if (low.match(/left|balance|calorie|remaining|остал|калор|баланс|сколько/)) {
+      return `Today you have ${fmt(Math.max(0, GOALS.kcal - data.totals.kcal))} kcal left from ${fmt(GOALS.kcal)} kcal. Logged: ${fmt(data.totals.kcal)} kcal.`;
+    }
+    return authToken()
+      ? "Backend did not return a coach answer. Try again in a moment."
+      : "Log in on mobile or this browser first so I can use your real backend diary and profile.";
+  };
+  const send = async (text) => {
     const m = text || val;
-    if (!m.trim()) return;
+    if (!m.trim() || sending) return;
     setMsgs(x => [...x, { who: 'me', text: m }]);
     setVal('');
-    setTimeout(() => setMsgs(x => [...x, { who: 'coach', text: "On it — added to your day. You've got 1,168 kcal and 56g protein left. A whey shake (130 kcal · 27g) would close most of that gap." }]), 500);
+    const token = authToken();
+    if (!token) {
+      setMsgs(x => [...x, { who: 'coach', text: fallbackReply(m) }]);
+      return;
+    }
+    setSending(true);
+    try {
+      const response = await fetch(`${trackfoodApiBase()}/api/v1/assistant/messages`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ message: m, client_context: clientContext() }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(apiDetailText(payload?.detail, `Coach failed (${response.status})`));
+      setMsgs(x => [...x, { who: 'coach', text: payload.content || fallbackReply(m) }]);
+    } catch (error) {
+      setMsgs(x => [...x, { who: 'coach', text: safeErrorText(error, fallbackReply(m)) }]);
+    } finally {
+      setSending(false);
+    }
   };
   return (
     <Panel pad={0} style={{ height: 560, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -472,7 +519,7 @@ function CoachView({ data, addFood, notify }) {
           <input value={val} onChange={e => setVal(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()}
             placeholder="Ask to log food, plan, or check your day…" style={{ flex: 1, background: t.panel2, border: `1px solid ${t.line2}`,
             borderRadius: 13, padding: '13px 16px', fontSize: 14, color: t.text, outline: 'none' }} />
-          <button onClick={() => send()} style={{ width: 48, borderRadius: 13, border: 'none', background: t.accent, color: t.accentOn, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <button onClick={() => send()} disabled={sending} aria-label="Send coach message" style={{ width: 48, borderRadius: 13, border: 'none', background: t.accent, color: t.accentOn, cursor: sending ? 'default' : 'pointer', opacity: sending ? 0.72 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <Icon name="send" size={20} fill="solid" />
           </button>
         </div>
@@ -486,8 +533,42 @@ function AddModal({ open, onClose, addFood, notify }) {
   const t = useTheme();
   const [q, setQ] = React.useState('');
   const [meal, setMeal] = React.useState('breakfast');
+  const [backendFoods, setBackendFoods] = React.useState([]);
+  const [state, setState] = React.useState({ loading: false, error: '' });
+  React.useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const id = setTimeout(() => {
+      const params = new URLSearchParams({ limit: '40' });
+      if (q.trim()) params.set('q', q.trim());
+      setState({ loading: true, error: '' });
+      fetch(`${trackfoodApiBase()}/api/v1/foods?${params.toString()}`, {
+        headers: { 'X-Client-Timezone': clientTimezoneHeader() },
+      })
+        .then(async response => {
+          const payload = await response.json().catch(() => []);
+          if (!response.ok) throw new Error(apiDetailText(payload?.detail, `Food search failed (${response.status})`));
+          return payload;
+        })
+        .then(rows => {
+          if (cancelled) return;
+          setBackendFoods((rows || []).map(foodFromApi).filter(Boolean));
+          setState({ loading: false, error: '' });
+        })
+        .catch(error => {
+          if (cancelled) return;
+          setBackendFoods([]);
+          setState({ loading: false, error: safeErrorText(error, 'Food search failed') });
+        });
+    }, 220);
+    return () => {
+      cancelled = true;
+      clearTimeout(id);
+    };
+  }, [open, q]);
   if (!open) return null;
-  const list = FOOD_DB.filter(f => f.name.toLowerCase().includes(q.toLowerCase()));
+  const localList = FOOD_DB.filter(f => f.name.toLowerCase().includes(q.toLowerCase()));
+  const list = backendFoods.length ? backendFoods : localList;
   const add = (f) => { addFood(f, meal); notify(`Added ${f.name}`); };
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 90, background: 'rgba(43,42,35,0.4)', backdropFilter: 'blur(3px)',
@@ -501,10 +582,13 @@ function AddModal({ open, onClose, addFood, notify }) {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9, background: t.panel2, border: `1px solid ${t.line2}`, borderRadius: 12, padding: '11px 14px' }}>
             <Icon name="search" size={17} color={t.faint} stroke={2.2} />
-            <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search 24K foods…" style={{ flex: 1, border: 'none', background: 'none', outline: 'none', fontSize: 14, color: t.text }} />
+            <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search product database…" style={{ flex: 1, border: 'none', background: 'none', outline: 'none', fontSize: 14, color: t.text }} />
           </div>
           <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
             {MEALS.map(m => <Chip key={m.id} active={meal === m.id} onClick={() => setMeal(m.id)} color={m.color}>{m.label}</Chip>)}
+          </div>
+          <div style={{ color: state.error ? t.danger : t.faint, fontSize: 11, fontWeight: 700, marginTop: 10 }}>
+            {state.loading ? 'Searching backend…' : state.error ? `${state.error} · local fallback` : backendFoods.length ? 'Backend product database' : 'Local fallback database'}
           </div>
         </div>
         <div style={{ overflowY: 'auto', padding: 12 }}>
@@ -555,7 +639,8 @@ function AppTweaks({ tw, setTweak }) {
 // ── App shell ─────────────────────────────────────────────────────────
 function DesktopApp() {
   const [tw, setTweak] = useTweaks(TWEAK_DEFAULTS);
-  const data = useAppData();
+  const profile = storedJSON('tf-design-profile', {}) || {};
+  const data = useAppData(authToken() && profile.email ? profile.email : 'guest');
   const [route, setRoute] = React.useState('home');
   const [addOpen, setAddOpen] = React.useState(false);
   const [toast, setToast] = React.useState(null);
@@ -572,14 +657,14 @@ function DesktopApp() {
     diary: <DiaryView data={data} onAdd={() => setAddOpen(true)} />,
     insights: <InsightsView data={data} />,
     plan: <PlanView data={data} />,
-    coach: <CoachView data={data} addFood={data.addFood} notify={notify} />,
+    coach: <CoachView data={data} addFood={data.addFood} notify={notify} profile={profile} />,
   };
 
   return (
     <ThemeCtx.Provider value={theme}>
       <div style={{ '--display': dispFont, fontFamily: "'Manrope', sans-serif", display: 'flex',
         width: '100vw', height: '100vh', background: theme.bg, color: theme.text, position: 'fixed', inset: 0, overflow: 'hidden' }}>
-        <Sidebar route={route} go={setRoute} openTweaks={openTweaks} />
+        <Sidebar route={route} go={setRoute} openTweaks={openTweaks} profile={profile} />
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           <DeskTopBar route={route} onAdd={() => setAddOpen(true)} />
           <div key={route + (tw.motion ? '' : 'static')} style={{ flex: 1, overflowY: 'auto', padding: '24px 32px 36px',

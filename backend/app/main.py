@@ -7,6 +7,7 @@ from decimal import Decimal
 import hashlib
 import hmac
 import ipaddress
+import json
 import os
 from pathlib import Path
 import re
@@ -59,6 +60,8 @@ APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Europe/Madrid")
 USE_MEMORY_STORAGE = DATABASE_URL.startswith("memory://")
 USE_MEMORY_PLANNER = USE_MEMORY_STORAGE or PLANNER_DATABASE_URL.startswith("memory://")
 USE_MEMORY_ASSISTANT = USE_MEMORY_STORAGE or ASSISTANT_DATABASE_URL.startswith("memory://")
+IS_VERCEL_DEPLOY = bool(os.getenv("VERCEL"))
+REQUIRE_PERSISTENT_STORAGE = os.getenv("STATIC_LAB_REQUIRE_PERSISTENT_STORAGE", "false").lower() == "true"
 SECRET_KEY = os.getenv("SECRET_KEY", "trackfoodai-local-dev-secret-change-me")
 JWT_ALGORITHM = "HS256"
 TOKEN_TTL_HOURS = 24 * 14
@@ -107,6 +110,24 @@ DANGEROUS_PATTERNS = [
         re.I,
     ),
 ]
+
+if REQUIRE_PERSISTENT_STORAGE and IS_VERCEL_DEPLOY and USE_MEMORY_STORAGE:
+    raise RuntimeError("DATABASE_URL is required on Vercel when STATIC_LAB_REQUIRE_PERSISTENT_STORAGE=true")
+
+
+def deployment_warnings() -> list[str]:
+    warnings: list[str] = []
+    if IS_VERCEL_DEPLOY and USE_MEMORY_STORAGE:
+        warnings.append("DATABASE_URL is missing; production is using memory storage and user data will reset.")
+    if IS_VERCEL_DEPLOY and USE_MEMORY_PLANNER:
+        warnings.append("PLANNER_DATABASE_URL is missing; calendar events are not persistent.")
+    if IS_VERCEL_DEPLOY and USE_MEMORY_ASSISTANT:
+        warnings.append("ASSISTANT_DATABASE_URL is missing; assistant context is not persistent.")
+    if not GEMINI_API_KEY:
+        warnings.append("GEMINI_API_KEY is missing; assistant uses local fallback instead of the model provider.")
+    if SECRET_KEY == "trackfoodai-local-dev-secret-change-me":
+        warnings.append("SECRET_KEY is still the local development default.")
+    return warnings
 
 
 def app_now() -> datetime:
@@ -284,6 +305,8 @@ class AppStatusResponse(BaseModel):
     products: int
     ai_provider_configured: bool
     ai_model: str
+    deployment_ready: bool
+    warnings: list[str]
     security: list[str]
 
 
@@ -332,6 +355,64 @@ class NutritionEstimateResponse(BaseModel):
     fiber_g: int
     confidence: float
     note: str
+
+
+class NutritionImageAnalyzeRequest(BaseModel):
+    image_data_url: str = Field(..., min_length=32, max_length=260_000)
+    meal_slot: MealSlot = "snack"
+    locale: str = Field("en", max_length=16)
+    notes: str = Field("", max_length=240)
+    client_context: str | None = Field(None, max_length=1200)
+
+    @field_validator("image_data_url")
+    @classmethod
+    def validate_image_data_url(cls, value: str) -> str:
+        if not value.startswith("data:image/"):
+            raise ValueError("Use an image data URL")
+        header, _, payload = value.partition(",")
+        if not payload or ";base64" not in header:
+            raise ValueError("Use a base64 image data URL")
+        mime = header.removeprefix("data:").split(";")[0]
+        if mime not in {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}:
+            raise ValueError("Unsupported image type")
+        if any(pattern.search(value[:240]) for pattern in DANGEROUS_PATTERNS[:3]):
+            raise ValueError("Image data contains unsafe patterns")
+        return value
+
+    @field_validator("locale", "notes", "client_context")
+    @classmethod
+    def validate_text(cls, value: str | None) -> str | None:
+        return assert_chat_clean(value) if value else value
+
+
+class NutritionImageItem(BaseModel):
+    food_id: str | None = None
+    name: str
+    grams: int = Field(..., ge=1, le=5000)
+    calories: int = Field(..., ge=0, le=10000)
+    protein_g: int = Field(..., ge=0, le=1000)
+    carbs_g: int = Field(..., ge=0, le=1000)
+    fat_g: int = Field(..., ge=0, le=1000)
+    fiber_g: int = Field(0, ge=0, le=1000)
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    assumptions: list[str] = Field(default_factory=list)
+
+
+class NutritionImageTotal(BaseModel):
+    calories: int
+    protein_g: int
+    carbs_g: int
+    fat_g: int
+    fiber_g: int
+
+
+class NutritionImageAnalyzeResponse(BaseModel):
+    items: list[NutritionImageItem]
+    total: NutritionImageTotal
+    needs_confirmation: bool = True
+    message: str
+    provider: str
+    model: str
 
 
 class RegisterRequest(BaseModel):
@@ -1282,6 +1363,25 @@ def get_food(food_id: str) -> FoodItem | None:
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM foods WHERE id = %s", (food_id,))
+            row = cur.fetchone()
+            return food_item_from_row(row) if row else None
+
+
+def get_food_by_barcode(barcode: str) -> FoodItem | None:
+    cleaned = assert_clean(barcode).strip()
+    if not cleaned:
+        return None
+
+    if USE_MEMORY_STORAGE:
+        for food in MEMORY_FOODS.values():
+            if food.barcode and food.barcode == cleaned:
+                return food
+        matches = list_foods_from_storage(q=cleaned, limit=1)
+        return matches[0] if matches else None
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM foods WHERE barcode = %s LIMIT 1", (cleaned,))
             row = cur.fetchone()
             return food_item_from_row(row) if row else None
 
@@ -3638,6 +3738,156 @@ def generate_assistant_reply(
     return sanitize_assistant_reply(text)
 
 
+def image_total(items: list[NutritionImageItem]) -> NutritionImageTotal:
+    return NutritionImageTotal(
+        calories=sum(item.calories for item in items),
+        protein_g=sum(item.protein_g for item in items),
+        carbs_g=sum(item.carbs_g for item in items),
+        fat_g=sum(item.fat_g for item in items),
+        fiber_g=sum(item.fiber_g for item in items),
+    )
+
+
+def image_item_from_food(food: FoodItem, confidence: float, note: str) -> NutritionImageItem:
+    grams = 100
+    serving_match = re.search(r"(\d+(?:[.,]\d+)?)\s*g", food.serving_label or "", re.I)
+    if serving_match:
+        grams = max(1, int(float(serving_match.group(1).replace(",", "."))))
+    return NutritionImageItem(
+        food_id=food.id,
+        name=food.name,
+        grams=grams,
+        calories=food.calories,
+        protein_g=food.protein_g,
+        carbs_g=food.carbs_g,
+        fat_g=food.fat_g,
+        fiber_g=food.fiber_g,
+        confidence=confidence,
+        assumptions=[note],
+    )
+
+
+def generate_local_image_analysis(payload: NutritionImageAnalyzeRequest) -> NutritionImageAnalyzeResponse:
+    query = payload.notes or payload.client_context or ""
+    foods = list_foods_from_storage(q=query, limit=5) if query else []
+    if not foods:
+        foods = list_foods_from_storage(limit=5)
+    food = foods[0]
+    item = image_item_from_food(
+        food,
+        0.42,
+        "Provider key is not configured; this is a database fallback and must be confirmed.",
+    )
+    language = "ru" if payload.locale.lower().startswith("ru") else assistant_language(f"{payload.locale} {payload.notes}")
+    message = (
+        f"Похоже на {food.name}, но это fallback без vision-модели. Проверь граммовку перед сохранением."
+        if language == "ru"
+        else f"Looks like {food.name}, but this is a fallback without the vision model. Confirm grams before saving."
+    )
+    return NutritionImageAnalyzeResponse(
+        items=[item],
+        total=image_total([item]),
+        needs_confirmation=True,
+        message=message,
+        provider="static_lab_fallback",
+        model="database-match",
+    )
+
+
+def parse_json_object(text: str) -> dict[str, Any]:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.I)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", cleaned, flags=re.S)
+        if not match:
+            raise
+        return json.loads(match.group(0))
+
+
+def generate_gemini_image_analysis(payload: NutritionImageAnalyzeRequest) -> NutritionImageAnalyzeResponse:
+    if not GEMINI_API_KEY:
+        return generate_local_image_analysis(payload)
+
+    header, _, data = payload.image_data_url.partition(",")
+    mime = header.removeprefix("data:").split(";")[0]
+    prompt = (
+        "You are static_lab's nutrition vision estimator. Return JSON only. "
+        "Do not diagnose health conditions. Do not claim exactness. "
+        "If the image is unclear or not food, set needs_confirmation true and explain. "
+        "Schema: {items:[{name, grams, calories, protein_g, carbs_g, fat_g, fiber_g, confidence, assumptions[]}], "
+        "total:{calories, protein_g, carbs_g, fat_g, fiber_g}, needs_confirmation, message}. "
+        f"User locale: {payload.locale}. Meal slot: {payload.meal_slot}. Notes: {payload.notes}. "
+        f"Client context: {payload.client_context or ''}"
+    )
+    body = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": prompt},
+                    {"inline_data": {"mime_type": mime, "data": data}},
+                ],
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.25,
+            "topP": 0.8,
+            "maxOutputTokens": 900,
+            "responseMimeType": "application/json",
+        },
+    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    try:
+        with httpx.Client(timeout=28.0, trust_env=False) as client:
+            response = client.post(
+                url,
+                headers={
+                    "x-goog-api-key": GEMINI_API_KEY,
+                    "Content-Type": "application/json",
+                },
+                json=body,
+            )
+            response.raise_for_status()
+            data_json = response.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="AI vision provider request failed") from exc
+
+    text = "\n".join(
+        part.get("text", "")
+        for part in data_json.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+    ).strip()
+    if not text:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="AI vision provider returned an empty reply")
+
+    try:
+        parsed = parse_json_object(text)
+        items = []
+        for raw_item in parsed.get("items", []):
+            item = NutritionImageItem(**raw_item)
+            if item.food_id is None:
+                matches = list_foods_from_storage(q=item.name, limit=1)
+                if matches:
+                    item.food_id = matches[0].id
+            items.append(item)
+        if not items:
+            raise ValueError("No items")
+        total_data = parsed.get("total") or image_total(items).model_dump()
+        return NutritionImageAnalyzeResponse(
+            items=items,
+            total=NutritionImageTotal(**total_data),
+            needs_confirmation=bool(parsed.get("needs_confirmation", True)),
+            message=sanitize_assistant_reply(str(parsed.get("message") or "Confirm this estimate before saving.")),
+            provider="gemini",
+            model=GEMINI_MODEL,
+        )
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="AI vision provider returned invalid JSON") from exc
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_storage_with_retries()
@@ -3831,6 +4081,7 @@ def health() -> HealthResponse:
 
 @app.get("/api/v1/status", response_model=AppStatusResponse, tags=["App"])
 def app_status() -> AppStatusResponse:
+    warnings = deployment_warnings()
     return AppStatusResponse(
         name="static_lab",
         version="1.1.0",
@@ -3840,6 +4091,8 @@ def app_status() -> AppStatusResponse:
         products=count_foods(),
         ai_provider_configured=bool(GEMINI_API_KEY),
         ai_model=GEMINI_MODEL,
+        deployment_ready=not warnings,
+        warnings=warnings,
         security=[
             "strict CORS",
             "trusted hosts",
@@ -3863,6 +4116,14 @@ def list_foods(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[FoodItem]:
     return list_foods_from_storage(q=q, store=store, limit=limit, offset=offset)
+
+
+@app.get("/api/v1/foods/barcode/{barcode}", response_model=FoodItem, tags=["Nutrition"])
+def food_by_barcode(barcode: str) -> FoodItem:
+    food = get_food_by_barcode(barcode)
+    if food is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Barcode not found")
+    return food
 
 
 @app.post(
@@ -3899,6 +4160,18 @@ def estimate_nutrition(
         confidence=confidence,
         note="Matched against the static_lab product database.",
     )
+
+
+@app.post(
+    "/api/v1/nutrition/analyze-image",
+    response_model=NutritionImageAnalyzeResponse,
+    tags=["Nutrition"],
+)
+def analyze_nutrition_image(
+    payload: NutritionImageAnalyzeRequest,
+    _: dict[str, Any] = Depends(get_current_user),
+) -> NutritionImageAnalyzeResponse:
+    return generate_gemini_image_analysis(payload)
 
 
 @app.post(
@@ -4155,6 +4428,20 @@ def create_assistant_message(
     assistant_message = create_assistant_message_for_user(user_id, context.id, "assistant", reply)
     log_security_event("assistant_message", "info", request, user_id, "Assistant reply generated")
     return assistant_message
+
+
+@app.get(
+    "/api/v1/assistant/app-context",
+    tags=["Assistant"],
+)
+def get_assistant_app_context(
+    request: Request,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, str]:
+    return {
+        "context": build_assistant_app_context(user, request_timezone(request)),
+        "timezone": str(request_timezone(request)),
+    }
 
 
 @app.get("/api/v1/security/summary", response_model=SecuritySummaryResponse, tags=["Security"])

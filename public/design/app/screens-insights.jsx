@@ -132,7 +132,7 @@ function InsightsScreen({ go, data }) {
         <div style={{ color: t.text, fontWeight: 800, fontSize: 18, margin: '4px 0 4px' }}>Ready to scan</div>
         <div style={{ color: t.faint, fontSize: 13, marginBottom: 14 }}>Barcode search for exact products, or photo for AI estimate.</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 9 }}>
-          {[['Products', '24K', 'indexed'], ['Estimate', 'Live', 'AI v2'], ['Source', 'DB', 'local + cloud']].map(([l, v, s]) => (
+          {[['Products', 'Backend', 'search'], ['Estimate', 'Vision', 'provider-gated'], ['Source', 'DB', authToken() ? 'synced' : 'local fallback']].map(([l, v, s]) => (
             <div key={l} style={{ background: t.elev, borderRadius: 13, padding: '12px 10px' }}>
               <div style={{ color: t.muted, fontSize: 11, fontWeight: 700 }}>{l}</div>
               <div style={{ color: t.text, fontWeight: 800, fontSize: 17, fontFamily: 'var(--display)', marginTop: 4 }}>{v}</div>

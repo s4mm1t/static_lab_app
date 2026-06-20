@@ -71,7 +71,7 @@ function HomeScreen({ go, data, openAdd }) {
 
   const quick = [
     { eyebrow: 'Diary', title: 'Log meals', sub: `${totals.count} meals today`, icon: 'diary', go: () => go('diary') },
-    { eyebrow: 'Food DB', title: 'Add product', sub: '24K products indexed', icon: 'search', go: () => openAdd('breakfast') },
+    { eyebrow: 'Food DB', title: 'Add product', sub: 'Backend product search', icon: 'search', go: () => openAdd('breakfast') },
     { eyebrow: 'Calendar', title: 'Plan day', sub: `${data.plans.length} plans`, icon: 'calendar', go: () => go('plan') },
     { eyebrow: 'Scan', title: 'Barcode / photo', sub: 'Camera scan', icon: 'camera', go: () => openAdd('lunch', 'scan') },
   ];

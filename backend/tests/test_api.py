@@ -10,6 +10,7 @@ os.environ["GEMINI_API_KEY"] = ""
 from fastapi.testclient import TestClient
 
 from app.main import (
+    MEMORY_FOODS,
     MEMORY_USERS_BY_EMAIL,
     MEMORY_USERS_BY_ID,
     AssistantMessageResponse,
@@ -43,6 +44,8 @@ def test_health_and_foods() -> None:
         assert status.status_code == 200
         assert status.json()["ai_provider_configured"] is False
         assert status.json()["ai_model"]
+        assert status.json()["deployment_ready"] is False
+        assert any("GEMINI_API_KEY" in warning for warning in status.json()["warnings"])
 
         foods = client.get("/api/v1/foods")
         assert foods.status_code == 200
@@ -55,6 +58,14 @@ def test_health_and_foods() -> None:
         page = client.get("/api/v1/foods?limit=2&offset=2")
         assert page.status_code == 200
         assert len(page.json()) == 2
+
+        MEMORY_FOODS["yogurt-berries"].barcode = "1234567890123"
+        barcode = client.get("/api/v1/foods/barcode/1234567890123")
+        assert barcode.status_code == 200
+        assert barcode.json()["id"] == "yogurt-berries"
+
+        missing_barcode = client.get("/api/v1/foods/barcode/000")
+        assert missing_barcode.status_code == 404
 
 
 def test_auth_meal_log_and_delete() -> None:
@@ -117,6 +128,42 @@ def test_auth_meal_log_and_delete() -> None:
         deleted = client.delete(f"/api/v1/meals/{meal_id}", headers=headers)
         assert deleted.status_code == 200
         assert deleted.json()["status"] == "deleted"
+
+
+def test_image_analysis_contract_requires_auth_and_returns_structured_fallback() -> None:
+    with TestClient(app) as client:
+        unauth = client.post(
+            "/api/v1/nutrition/analyze-image",
+            json={"image_data_url": "data:image/png;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "notes": "yogurt"},
+        )
+        assert unauth.status_code == 401
+
+        register = client.post(
+            "/api/v1/auth/register",
+            json={
+                "name": "Vision User",
+                "email": "vision@example.com",
+                "password": "LocalPass123",
+                "calorie_goal": 1900,
+                "activity_level": "balanced",
+            },
+        )
+        headers = {"Authorization": f"Bearer {register.json()['token']}"}
+        response = client.post(
+            "/api/v1/nutrition/analyze-image",
+            json={
+                "image_data_url": "data:image/png;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "notes": "yogurt with berries",
+                "locale": "ru",
+            },
+            headers=headers,
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["needs_confirmation"] is True
+        assert payload["provider"] == "static_lab_fallback"
+        assert payload["items"]
+        assert payload["total"]["calories"] >= 0
 
 
 def test_auth_validation_errors_are_strings() -> None:

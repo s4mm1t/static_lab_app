@@ -3,6 +3,11 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const appDir = dirname(fileURLToPath(import.meta.url));
+const isProductionDeploy = process.env.VERCEL === "1" || process.env.NODE_ENV === "production";
+const devBackendOrigin = process.env.STATIC_LAB_DEV_API_ORIGIN || "http://127.0.0.1:8000";
+const designConnectSrc = isProductionDeploy
+  ? "'self'"
+  : "'self' http://127.0.0.1:8000 http://localhost:8000";
 
 const contentSecurityPolicy = [
   "default-src 'self'",
@@ -15,7 +20,7 @@ const contentSecurityPolicy = [
   "font-src 'self' data: https://fonts.gstatic.com",
   "img-src 'self' data: blob:",
   "media-src 'self' blob:",
-  "connect-src 'self'",
+  `connect-src ${designConnectSrc}`,
   "worker-src 'self' blob:",
   "manifest-src 'self'",
   "upgrade-insecure-requests",
@@ -32,7 +37,7 @@ const designContentSecurityPolicy = [
   "font-src 'self' data: https://fonts.gstatic.com",
   "img-src 'self' data: blob:",
   "media-src 'self' blob:",
-  "connect-src 'self'",
+  `connect-src ${designConnectSrc}`,
   "worker-src 'self' blob:",
   "manifest-src 'self'",
   "upgrade-insecure-requests",
@@ -65,6 +70,7 @@ const designSecurityHeaders = securityHeaders.map((header) => {
 
 const nextConfig: NextConfig = {
   outputFileTracingRoot: appDir,
+  allowedDevOrigins: ["127.0.0.1", "localhost"],
   async headers() {
     return [
       {
@@ -80,6 +86,21 @@ const nextConfig: NextConfig = {
             value: "no-store, max-age=0, must-revalidate",
           },
         ],
+      },
+    ];
+  },
+  async rewrites() {
+    if (isProductionDeploy) {
+      return [];
+    }
+    return [
+      {
+        source: "/api/v1/:path*",
+        destination: `${devBackendOrigin}/api/v1/:path*`,
+      },
+      {
+        source: "/health",
+        destination: `${devBackendOrigin}/health`,
       },
     ];
   },

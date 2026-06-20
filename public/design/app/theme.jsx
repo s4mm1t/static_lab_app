@@ -159,10 +159,7 @@ function isLocalApiHost(hostname) {
 function trackfoodApiBase() {
   const explicit = String(window.TRACKFOOD_API_BASE || '').trim().replace(/\/+$/, '');
   if (explicit) return explicit;
-  const { protocol, hostname, origin } = window.location;
-  return isLocalApiHost(hostname || '127.0.0.1')
-    ? `${protocol}//${hostname || '127.0.0.1'}:8000`
-    : origin;
+  return window.location.origin;
 }
 function hydrateLog(rows) {
   return (rows || []).map(item => {
@@ -175,8 +172,113 @@ function clientTimezoneHeader() {
   return deviceTimezone();
 }
 
+function authToken() {
+  return localStorage.getItem('tf-auth-token') || localStorage.getItem('trackfoodai-token') || '';
+}
+
+function authHeaders() {
+  const token = authToken();
+  return {
+    'Content-Type': 'application/json',
+    'X-Client-Timezone': clientTimezoneHeader(),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+function parseServingG(food) {
+  const fromLabel = String(food?.serving_label || food?.servingLabel || '').match(/(\d+(?:[.,]\d+)?)\s*g/i);
+  if (fromLabel) return Math.max(5, Math.round(Number(fromLabel[1].replace(',', '.'))));
+  return Math.max(5, Number(food?.servingG) || 100);
+}
+
+function foodFromApi(food) {
+  if (!food) return null;
+  return {
+    id: food.id,
+    backendId: food.id,
+    name: food.name,
+    brand: food.brand || food.store || food.detail || 'Product DB',
+    store: food.store || '',
+    barcode: food.barcode || '',
+    kcal: food.calories,
+    protein: food.protein_g,
+    carbs: food.carbs_g,
+    fat: food.fat_g,
+    fiber: food.fiber_g,
+    emoji: food.image ? '🍽️' : '•',
+    tags: [food.meal, food.source, food.store].filter(Boolean),
+    servingG: parseServingG(food),
+    price: food.price,
+    currency: food.currency || 'EUR',
+    source: food.source || 'backend',
+  };
+}
+
+function foodToApiId(food) {
+  return food?.backendId || food?.id || food?.baseId || '';
+}
+
+function logFromApiMeal(meal) {
+  const food = foodFromApi(meal.food);
+  if (!food) return null;
+  const logged = new Date(meal.logged_at);
+  return {
+    uid: meal.id,
+    backendId: meal.id,
+    food,
+    mealId: meal.meal_slot,
+    time: nowTime(logged),
+    day: dateKeyFromDate(logged),
+    timezone: clientTimezoneHeader(),
+    servingMultiplier: meal.serving_multiplier,
+  };
+}
+
 function sameLocalDay(item, key) {
   return item?.day === key || item?.date === key || item?.loggedDate === key;
+}
+
+function safeErrorText(error, fallback = 'Request failed') {
+  if (!error) return fallback;
+  if (typeof error === 'string') return error;
+  if (typeof safeText === 'function') return safeText(error, fallback);
+  return error.message || fallback;
+}
+
+function apiDetailText(detail, fallback = 'Request failed') {
+  if (typeof detailText === 'function') return detailText(detail, fallback);
+  if (typeof detail === 'string') return detail;
+  if (detail && typeof detail === 'object') return JSON.stringify(detail);
+  return fallback;
+}
+
+function planTypeToApi(type) {
+  const key = String(type || '').toLowerCase();
+  if (key.includes('meal')) return 'meal';
+  if (key.includes('training') || key.includes('train')) return 'training';
+  if (key.includes('note')) return 'note';
+  return 'task';
+}
+
+function planTypeFromApi(type) {
+  if (type === 'meal') return 'Meal';
+  if (type === 'training') return 'Training';
+  if (type === 'note') return 'Note';
+  return 'Task';
+}
+
+function planFromApiEvent(event) {
+  if (!event) return null;
+  return {
+    id: event.id,
+    backendId: event.id,
+    date: event.scheduled_date,
+    time: event.scheduled_time || '',
+    type: planTypeFromApi(event.event_type),
+    title: event.title,
+    status: event.status || 'planned',
+    accent: event.accent || '#4f86f7',
+  };
 }
 
 // ── App data store (lifted state, isolated per account) ───────────────
@@ -187,6 +289,7 @@ function useAppData(accountId = 'guest') {
   const [todayKey, setTodayKey] = React.useState(() => dateKey(0));
   const [log, setLog] = React.useState(loadLog);
   const [plans, setPlans] = React.useState(loadPlans);
+  const [syncState, setSyncState] = React.useState({ loading: false, error: '', source: 'local' });
 
   React.useEffect(() => {
     let timer;
@@ -207,6 +310,52 @@ function useAppData(accountId = 'guest') {
   }, [loadLog, loadPlans]);
 
   React.useEffect(() => {
+    const token = authToken();
+    if (!token || dataKey === 'guest') return;
+    let cancelled = false;
+    setSyncState({ loading: true, error: '', source: 'backend' });
+    fetch(`${trackfoodApiBase()}/api/v1/meals`, { headers: authHeaders() })
+      .then(async response => {
+        const payload = await response.json().catch(() => []);
+        if (!response.ok) throw new Error(apiDetailText(payload?.detail, `Meals sync failed (${response.status})`));
+        return payload;
+      })
+      .then(rows => {
+        if (cancelled) return;
+        const backendLog = hydrateLog((rows || []).map(logFromApiMeal).filter(Boolean));
+        setLog(backendLog);
+        setSyncState({ loading: false, error: '', source: 'backend' });
+      })
+      .catch(error => {
+        if (cancelled) return;
+        setSyncState({ loading: false, error: safeErrorText(error, 'Meals sync failed'), source: 'local' });
+      });
+    return () => { cancelled = true; };
+  }, [dataKey]);
+
+  React.useEffect(() => {
+    const token = authToken();
+    if (!token || dataKey === 'guest') return;
+    let cancelled = false;
+    const params = new URLSearchParams({
+      date_from: dateKey(-45),
+      date_to: dateKey(90),
+    });
+    fetch(`${trackfoodApiBase()}/api/v1/calendar/events?${params.toString()}`, { headers: authHeaders() })
+      .then(async response => {
+        const payload = await response.json().catch(() => []);
+        if (!response.ok) throw new Error(apiDetailText(payload?.detail, `Calendar sync failed (${response.status})`));
+        return payload;
+      })
+      .then(rows => {
+        if (cancelled) return;
+        setPlans((rows || []).map(planFromApiEvent).filter(Boolean));
+      })
+      .catch(error => setSyncState({ loading: false, error: safeErrorText(error, 'Calendar sync failed'), source: 'local' }));
+    return () => { cancelled = true; };
+  }, [dataKey, todayKey]);
+
+  React.useEffect(() => {
     localStorage.setItem(accountStorageKey(dataKey, 'log'), JSON.stringify(log));
   }, [dataKey, log]);
 
@@ -216,24 +365,69 @@ function useAppData(accountId = 'guest') {
 
   const addFood = (food, mealId, amountG) => {
     const prepared = amountG ? scaleFoodPortion(food, amountG) : { ...food };
-    setLog(l => [...l, {
+    const localItem = {
       uid: 'u' + Date.now() + Math.random().toString(36).slice(2,6),
       food: prepared,
       mealId,
       time: nowTime(),
       day: todayKey,
       timezone: clientTimezoneHeader(),
-    }]);
+    };
+    setLog(l => [...l, localItem]);
+    const token = authToken();
+    const foodId = foodToApiId(food);
+    if (!token || !foodId) return;
+    fetch(`${trackfoodApiBase()}/api/v1/meals`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        food_id: foodId,
+        meal_slot: mealId,
+        serving_multiplier: Math.max(0.05, Math.min(20, (Number(amountG) || parseServingG(food)) / parseServingG(food))),
+      }),
+    })
+      .then(async response => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(apiDetailText(payload?.detail, `Meal save failed (${response.status})`));
+        return payload;
+      })
+      .then(row => {
+        const synced = logFromApiMeal(row);
+        if (!synced) return;
+        setLog(l => l.map(item => item.uid === localItem.uid ? synced : item));
+      })
+      .catch(error => setSyncState({ loading: false, error: safeErrorText(error, 'Meal save failed'), source: 'local' }));
   };
   const updateFoodAmount = (uid, amountG) => {
+    const target = log.find(item => item.uid === uid);
     setLog(l => l.map(item => {
       if (item.uid !== uid) return item;
       const source = byId(item.food?.baseId || item.food?.id || item.ref) || item.food;
       return { ...item, food: scaleFoodPortion(source, amountG) };
     }));
+    if (target?.backendId && authToken()) {
+      fetch(`${trackfoodApiBase()}/api/v1/meals/${encodeURIComponent(target.backendId)}`, {
+        method: 'PATCH',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          serving_multiplier: Math.max(0.05, Math.min(20, (Number(amountG) || parseServingG(target.food)) / parseServingG(target.food))),
+        }),
+      }).catch(error => setSyncState({ loading: false, error: safeErrorText(error, 'Meal update failed'), source: 'local' }));
+    }
   };
-  const removeFood = (uid) => setLog(l => l.filter(i => i.uid !== uid));
-  const addPlan = (p) => setPlans(ps => {
+  const removeFood = (uid) => {
+    const target = log.find(item => item.uid === uid);
+    setLog(l => l.filter(i => i.uid !== uid));
+    if (target?.backendId && authToken()) {
+      fetch(`${trackfoodApiBase()}/api/v1/meals/${encodeURIComponent(target.backendId)}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      }).catch(error => setSyncState({ loading: false, error: safeErrorText(error, 'Meal delete failed'), source: 'local' }));
+    }
+  };
+  const addPlan = (p) => {
+    const localPlan = { ...p, id: 'p' + Date.now() + Math.random().toString(36).slice(2,6) };
+    setPlans(ps => {
     const normalizedTitle = normalizeLookupText(p.title);
     const exists = ps.some(item =>
       item.date === p.date &&
@@ -241,11 +435,37 @@ function useAppData(accountId = 'guest') {
       item.time === p.time &&
       normalizeLookupText(item.title) === normalizedTitle
     );
-    return exists ? ps : [...ps, { ...p, id: 'p' + Date.now() }];
-  });
+    return exists ? ps : [...ps, localPlan];
+    });
+    const token = authToken();
+    if (!token) return;
+    fetch(`${trackfoodApiBase()}/api/v1/calendar/events`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        event_type: planTypeToApi(p.type),
+        title: p.title,
+        scheduled_date: p.date || todayKey,
+        scheduled_time: p.time || null,
+        status: p.status || 'planned',
+        accent: p.accent || '#4f86f7',
+      }),
+    })
+      .then(async response => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(apiDetailText(payload?.detail, `Calendar save failed (${response.status})`));
+        return payload;
+      })
+      .then(row => {
+        const synced = planFromApiEvent(row);
+        if (!synced) return;
+        setPlans(ps => ps.map(item => item.id === localPlan.id ? synced : item));
+      })
+      .catch(error => setSyncState({ loading: false, error: safeErrorText(error, 'Calendar save failed'), source: 'local' }));
+  };
   const todaysLog = React.useMemo(() => log.filter(item => sameLocalDay(item, todayKey)), [log, todayKey]);
   const totals = totalsFromLog(todaysLog);
-  return { accountId: dataKey, log: todaysLog, allLog: log, todayKey, totals, addFood, updateFoodAmount, removeFood, plans, addPlan };
+  return { accountId: dataKey, log: todaysLog, allLog: log, todayKey, totals, syncState, addFood, updateFoodAmount, removeFood, plans, addPlan };
 }
 
 function deviceNow() {
@@ -329,4 +549,6 @@ Object.assign(window, {
   deviceNow, deviceTimezone, deviceDateTimeLabel, weekDaysMondayFirst, nowTime,
   storedJSON, accountStorageKey, accountStorageId,
   normalizeLookupText, foodMatchesQuery, findFoodInText, trackfoodApiBase, clientTimezoneHeader,
+  authToken, authHeaders, foodFromApi, foodToApiId, parseServingG,
+  planFromApiEvent, planTypeToApi, safeErrorText, apiDetailText,
 });

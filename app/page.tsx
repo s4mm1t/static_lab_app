@@ -2,7 +2,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { DesignFrame } from "./design-frame";
 
-const DESIGN_ASSET_VERSION = "navdock-20260614-1";
+const DESIGN_ASSET_VERSION = "fullbind-20260620-2";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";

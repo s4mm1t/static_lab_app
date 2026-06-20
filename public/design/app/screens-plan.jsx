@@ -219,10 +219,10 @@ function CoachScreen({ go, data, profile, addFood, addPlan, notify }) {
       addFood(food, 'snack', grams);
       notify(`Logged ${food.name}`);
       return language === 'ru'
-        ? `Локально добавил ${food.name}${grams ? `, ${grams}g` : ''} в Diary.`
+        ? `Добавил ${food.name}${grams ? `, ${grams}g` : ''} в Diary.`
         : language === 'es'
-          ? `Añadí localmente ${food.name}${grams ? `, ${grams}g` : ''} al diario.`
-          : `Added ${food.name}${grams ? `, ${grams}g` : ''} locally to Diary.`;
+          ? `Añadí ${food.name}${grams ? `, ${grams}g` : ''} al diario.`
+          : `Added ${food.name}${grams ? `, ${grams}g` : ''} to Diary.`;
     }
     if (low.match(/plan|remind|tomorrow|train|workout|leg|run|running|план|напом|завтра|трен|зал|пробеж|бег|entreno|mañana|correr/)) {
       const isRun = low.match(/run|running|пробеж|бег|correr/);
@@ -230,10 +230,10 @@ function CoachScreen({ go, data, profile, addFood, addPlan, notify }) {
       addPlan({ date: dateKey(1), type: 'Training', title, time: '18:30' });
       notify('Plan added to calendar');
       return language === 'ru'
-        ? `Локально добавил в календарь: ${title}, завтра в 18:30.`
+        ? `Добавил в календарь: ${title}, завтра в 18:30.`
         : language === 'es'
-          ? `Añadí localmente al calendario: ${title}, mañana a las 18:30.`
-          : `Added locally to calendar: ${title}, tomorrow at 18:30.`;
+          ? `Añadí al calendario: ${title}, mañana a las 18:30.`
+          : `Added to calendar: ${title}, tomorrow at 18:30.`;
     }
     return null;
   };

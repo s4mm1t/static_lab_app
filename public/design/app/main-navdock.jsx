@@ -140,11 +140,11 @@ function App() {
                 : screens[route.screen]}
             </Screen>
             {/* bottom nav */}
-            <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, height: 66, zIndex: 40, paddingBottom: 0,
-              background: theme.panel2, borderTop: `1px solid ${theme.line}`, boxShadow: '0 -12px 34px rgba(80,70,40,0.14)',
+            <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, height: 58, zIndex: 40, paddingBottom: 0,
+              background: theme.panel2, borderTop: `1px solid ${theme.line}`, boxShadow: '0 -8px 22px rgba(80,70,40,0.12)',
               pointerEvents: 'none', overflow: 'visible' }}>
-              <div style={{ margin: '0 16px', height: 58, boxSizing: 'border-box', paddingBottom: 0, borderRadius: '20px 20px 0 0', background: theme.panel2, border: `1px solid ${theme.line}`, borderBottom: 'none',
-                boxShadow: '0 -8px 24px rgba(80,70,40,0.10)', display: 'flex', alignItems: 'center', justifyContent: 'space-around',
+              <div style={{ margin: 0, height: 58, boxSizing: 'border-box', paddingBottom: 0, borderRadius: 0, background: theme.panel2, border: 'none',
+                boxShadow: 'none', display: 'flex', alignItems: 'center', justifyContent: 'space-around',
                 position: 'absolute', left: 0, right: 0, bottom: 0, pointerEvents: 'auto' }}>
                 {nav.map(n => {
                   if (n.fab) {
@@ -201,7 +201,7 @@ function Screen({ children, routeKey, motion, isCoach }) {
   return (
     <div key={routeKey} style={{
       position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden',
-      padding: 'max(6px, calc(env(safe-area-inset-top, 0px) - 18px)) calc(18px + env(safe-area-inset-right, 0px)) 68px calc(18px + env(safe-area-inset-left, 0px))',
+      padding: 'max(6px, calc(env(safe-area-inset-top, 0px) - 18px)) calc(18px + env(safe-area-inset-right, 0px)) 60px calc(18px + env(safe-area-inset-left, 0px))',
       display: isCoach ? 'flex' : 'block', flexDirection: 'column',
       opacity: 1,
       transform: shown ? 'none' : 'translateY(14px) scale(.985)',
