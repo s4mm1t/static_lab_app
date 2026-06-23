@@ -89,6 +89,46 @@ type NutritionEstimate = {
   note: string;
 };
 
+type NutritionImageItem = {
+  food_id?: string | null;
+  name: string;
+  grams: number;
+  calories: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+  fiber_g: number;
+  confidence: number;
+  assumptions: string[];
+};
+
+type NutritionImageAnalysis = {
+  items: NutritionImageItem[];
+  total: {
+    calories: number;
+    protein_g: number;
+    carbs_g: number;
+    fat_g: number;
+    fiber_g: number;
+  };
+  needs_confirmation: boolean;
+  message: string;
+  provider: string;
+  model: string;
+};
+
+type BarcodeImageAnalysis = {
+  barcode?: string | null;
+  candidates: string[];
+  raw_text: string;
+  confidence: number;
+  food?: FoodItem | null;
+  provider: string;
+  model: string;
+  status: "matched" | "not_found" | "no_code";
+  message: string;
+};
+
 type AuthResponse = {
   token: string;
   profile: PublicProfile;
@@ -419,6 +459,36 @@ function dedupeFoods(items: FoodItem[]) {
   });
 }
 
+function normalizeScannedCode(value: string) {
+  const raw = value.trim();
+  if (!raw) {
+    return "";
+  }
+
+  try {
+    const url = new URL(raw);
+    for (const key of ["barcode", "code", "gtin", "ean", "upc"]) {
+      const candidate = url.searchParams.get(key);
+      if (candidate) {
+        const digits = candidate.replace(/\D/g, "");
+        if (digits.length >= 8) {
+          return digits;
+        }
+      }
+    }
+    const pathDigits = url.pathname.match(/\d{8,14}/g)?.at(-1);
+    if (pathDigits) {
+      return pathDigits;
+    }
+  } catch {
+    // Raw scanner output is often just digits, so URL parsing is optional.
+  }
+
+  const compact = raw.replace(/[\s-]/g, "");
+  const digits = compact.match(/\d{8,14}/)?.[0];
+  return digits || compact;
+}
+
 function scaledFood(food: FoodItem, multiplier: number) {
   return {
     calories: Math.round(food.calories * multiplier),
@@ -427,6 +497,45 @@ function scaledFood(food: FoodItem, multiplier: number) {
     fat_g: Math.round(food.fat_g * multiplier),
     fiber_g: Math.round(food.fiber_g * multiplier),
   };
+}
+
+function readImageDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read image"));
+    reader.onload = () => resolve(String(reader.result));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function prepareMealPhotoDataUrl(file: File) {
+  if (!file.type.startsWith("image/")) {
+    throw new Error("Choose an image file");
+  }
+  const raw = await readImageDataUrl(file);
+  if (file.type === "image/gif" || file.type === "image/heic" || file.type === "image/heif") {
+    return raw;
+  }
+
+  return new Promise<string>((resolve) => {
+    const image = new window.Image();
+    image.onerror = () => resolve(raw);
+    image.onload = () => {
+      const maxSide = 1280;
+      const ratio = Math.min(1, maxSide / Math.max(image.width, image.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.width * ratio));
+      canvas.height = Math.max(1, Math.round(image.height * ratio));
+      const context = canvas.getContext("2d");
+      if (!context) {
+        resolve(raw);
+        return;
+      }
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL("image/jpeg", 0.78));
+    };
+    image.src = raw;
+  });
 }
 
 function toDateTimeLocal(value: string) {
@@ -1205,6 +1314,7 @@ function BottomNav({
 export default function StaticLabApp() {
   const barcodeVideoRef = useRef<HTMLVideoElement | null>(null);
   const barcodeStreamRef = useRef<MediaStream | null>(null);
+  const barcodePhotoInputRef = useRef<HTMLInputElement | null>(null);
   const [theme, setTheme] = useState<Theme>("dark");
   const [isHydrated, setIsHydrated] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>("home");
@@ -1250,6 +1360,7 @@ export default function StaticLabApp() {
   });
   const [barcodeText, setBarcodeText] = useState("");
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
   const [assistantContexts, setAssistantContexts] = useState<AssistantContext[]>([]);
   const [activeAssistantContextId, setActiveAssistantContextId] = useState<string | null>(null);
   const [contextTitle, setContextTitle] = useState("New context");
@@ -1771,6 +1882,7 @@ export default function StaticLabApp() {
     setEditingMeal(null);
     setEstimate(null);
     setPhotoPreview(null);
+    setPhotoDataUrl(null);
     setBarcodeText("");
     setActiveTab("home");
     setAuthMode("login");
@@ -1999,6 +2111,102 @@ export default function StaticLabApp() {
     setIsBarcodeScanning(false);
   }
 
+  async function lookupBarcode(rawCode: string) {
+    const code = normalizeScannedCode(rawCode);
+    if (!code) {
+      setBarcodeScanError("Enter barcode digits first.");
+      setStatus("Barcode is empty");
+      return;
+    }
+
+    setBarcodeText(code);
+    setQuery(code);
+    setStoreFilter("");
+    setBarcodeScanError("");
+    try {
+      setIsFoodLoading(true);
+      const food = await apiRequest<FoodItem>(`/api/v1/foods/barcode/${encodeURIComponent(code)}`);
+      setFoods([food]);
+      chooseFood(food);
+      setIsFoodListOpen(false);
+      setStatus("Barcode match found");
+      showToast("Barcode match found", "success");
+      navigate("search");
+    } catch (error) {
+      setSelectedFood(null);
+      setFoods([]);
+      setIsFoodListOpen(true);
+      const message =
+        getErrorStatus(error) === 404
+          ? "Barcode not found. Try product search or scan another side of the package."
+          : getErrorMessage(error);
+      setBarcodeScanError(message);
+      setFoodSearchError(message);
+      setStatus(message);
+      showToast(message, "error");
+      navigate("search");
+    } finally {
+      setIsFoodLoading(false);
+    }
+  }
+
+  async function analyzeBarcodePhoto(file: File | undefined) {
+    if (!file) {
+      return;
+    }
+
+    setBarcodeScanError("");
+    setStatus("Reading barcode photo...");
+    try {
+      setIsFoodLoading(true);
+      const imageDataUrl = await prepareMealPhotoDataUrl(file);
+      const analysis = await apiRequest<BarcodeImageAnalysis>(
+        "/api/v1/foods/barcode-image",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            image_data_url: imageDataUrl,
+            locale: navigator.language || "en",
+            notes: "Read product barcode or QR from scanner panel",
+          }),
+        },
+      );
+
+      if (analysis.barcode) {
+        setBarcodeText(analysis.barcode);
+        setQuery(analysis.barcode);
+      }
+
+      if (analysis.food) {
+        setFoods([analysis.food]);
+        chooseFood(analysis.food);
+        setIsFoodListOpen(false);
+        setStatus(analysis.message);
+        showToast("Barcode photo matched product", "success");
+        navigate("search");
+        return;
+      }
+
+      setSelectedFood(null);
+      setFoods([]);
+      setIsFoodListOpen(true);
+      setBarcodeScanError(analysis.message);
+      setStatus(analysis.message);
+      showToast(analysis.message, analysis.status === "no_code" ? "error" : "info");
+      navigate("search");
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setBarcodeScanError(message);
+      setStatus(message);
+      showToast(message, "error");
+    } finally {
+      setIsFoodLoading(false);
+      if (barcodePhotoInputRef.current) {
+        barcodePhotoInputRef.current.value = "";
+      }
+    }
+  }
+
   async function startBarcodeScanner() {
     setBarcodeScanError("");
     if (typeof window === "undefined" || !navigator.mediaDevices?.getUserMedia) {
@@ -2034,7 +2242,7 @@ export default function StaticLabApp() {
       video.srcObject = stream;
       await video.play();
       const detector = new BarcodeDetectorCtor({
-        formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128"],
+        formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"],
       });
       const scan = async () => {
         if (!barcodeStreamRef.current || !barcodeVideoRef.current) {
@@ -2044,10 +2252,7 @@ export default function StaticLabApp() {
         const code = results[0]?.rawValue;
         if (code) {
           stopBarcodeScanner();
-          setBarcodeText(code);
-          setQuery(code);
-          await loadFoods(code, "", 0);
-          setIsFoodListOpen(true);
+          await lookupBarcode(code);
           return;
         }
         window.requestAnimationFrame(() => void scan());
@@ -2310,37 +2515,78 @@ export default function StaticLabApp() {
     if (!barcodeText.trim()) {
       return;
     }
-    setQuery(barcodeText.trim());
-    setStoreFilter("");
-    await loadFoods(barcodeText.trim(), "", 0);
-    setIsFoodListOpen(true);
-    navigate("search");
+    await lookupBarcode(barcodeText);
   }
 
   async function handlePhotoEstimate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!photoPreview) {
+    if (!photoDataUrl) {
       setStatus("Add photo first");
       showToast("Add photo first", "error");
       return;
     }
-    const description = estimateText.trim() || "photo food estimate";
-    setEstimateText(description);
+    if (!token) {
+      setStatus("Login before photo recognition");
+      showToast("Login before photo recognition", "error");
+      navigate("profile");
+      return;
+    }
+
     try {
-      const payload = await apiRequest<NutritionEstimate>("/api/v1/nutrition/estimate", {
-        method: "POST",
-        body: JSON.stringify({ description }),
-      });
-      setEstimate(payload);
-      const matches = await apiRequest<FoodItem[]>(
-        `/api/v1/foods?q=${encodeURIComponent(payload.label)}&limit=8`,
+      setIsFoodLoading(true);
+      const analysis = await apiRequest<NutritionImageAnalysis>(
+        "/api/v1/nutrition/analyze-image",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            image_data_url: photoDataUrl,
+            meal_slot: activeMealSlot,
+            locale: navigator.language || "en",
+            notes: estimateText.trim(),
+            client_context: `Current local time: ${new Date().toLocaleString()}. Timezone: ${clientTimezone()}`,
+          }),
+        },
+        token,
       );
-      if (matches[0]) {
-        chooseFood(matches[0]);
+      const item = analysis.items[0];
+      if (!item) {
+        throw new Error("No food was recognized in this photo.");
       }
-      setStatus("Photo estimate ready");
+
+      const nextEstimate: NutritionEstimate = {
+        food_id: item.food_id || "",
+        label: item.name,
+        calories: item.calories,
+        protein_g: item.protein_g,
+        carbs_g: item.carbs_g,
+        fat_g: item.fat_g,
+        fiber_g: item.fiber_g,
+        confidence: item.confidence,
+        note: analysis.message,
+      };
+      setEstimate(nextEstimate);
+      const matches = await apiRequest<FoodItem[]>(
+        `/api/v1/foods?q=${encodeURIComponent(item.name)}&limit=8`,
+      );
+      const exactMatch = item.food_id
+        ? matches.find((food) => food.id === item.food_id)
+        : null;
+      const selectedMatch = exactMatch ?? matches[0] ?? null;
+      setFoods(matches.length ? dedupeFoods(matches) : []);
+      if (selectedMatch) {
+        chooseFood(selectedMatch);
+        showToast("Photo recognized. Confirm grams before saving.", "success");
+      } else {
+        setSelectedFood(null);
+        showToast("Photo recognized, but no exact product matched.", "info");
+      }
+      setStatus(`${analysis.provider === "gemini" ? "Vision" : "Database"} photo estimate ready`);
     } catch (error) {
-      setStatus(getErrorMessage(error));
+      const message = getErrorMessage(error);
+      setStatus(message);
+      showToast(message, "error");
+    } finally {
+      setIsFoodLoading(false);
     }
   }
 
@@ -2933,6 +3179,14 @@ export default function StaticLabApp() {
                 <div className="barcode-camera">
                   <video ref={barcodeVideoRef} muted playsInline />
                   <span className="scan-frame" aria-hidden="true" />
+                  <input
+                    ref={barcodePhotoInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    hidden
+                    onChange={(event) => void analyzeBarcodePhoto(event.target.files?.[0])}
+                  />
                   <div>
                     <button
                       type="button"
@@ -2947,10 +3201,18 @@ export default function StaticLabApp() {
                         Stop
                       </button>
                     )}
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => barcodePhotoInputRef.current?.click()}
+                      disabled={isFoodLoading}
+                    >
+                      AI read photo
+                    </button>
                   </div>
                   <small>
                     {barcodeScanError ||
-                      (isBarcodeScanning ? "Point the frame at the barcode." : "Camera scan or manual code.")}
+                      (isBarcodeScanning ? "Point the frame at the barcode." : "Camera scan, AI photo read, or manual code.")}
                   </small>
                 </div>
               </section>
@@ -2967,6 +3229,23 @@ export default function StaticLabApp() {
                       onChange={(event) => {
                         const file = event.target.files?.[0];
                         setPhotoPreview(file ? URL.createObjectURL(file) : null);
+                        setPhotoDataUrl(null);
+                        setEstimate(null);
+                        if (!file) {
+                          return;
+                        }
+                        void prepareMealPhotoDataUrl(file)
+                          .then((dataUrl) => {
+                            setPhotoDataUrl(dataUrl);
+                            setStatus("Photo ready for recognition");
+                          })
+                          .catch((error) => {
+                            const message = getErrorMessage(error);
+                            setPhotoPreview(null);
+                            setPhotoDataUrl(null);
+                            setStatus(message);
+                            showToast(message, "error");
+                          });
                       }}
                     />
                     {photoPreview ? (
@@ -2982,14 +3261,15 @@ export default function StaticLabApp() {
                       className="secondary-button wide"
                       onClick={() => {
                         setPhotoPreview(null);
+                        setPhotoDataUrl(null);
                         setEstimate(null);
                       }}
                     >
                       Retake photo
                     </button>
                   )}
-              <button type="submit" className="primary-button wide" disabled={!photoPreview}>
-                {photoPreview ? "Estimate food" : "Add photo first"}
+              <button type="submit" className="primary-button wide" disabled={!photoDataUrl || isFoodLoading}>
+                {photoPreview ? (photoDataUrl ? "Recognize food" : "Preparing photo...") : "Add photo first"}
                   </button>
                 </form>
                 {estimate && (
@@ -3557,9 +3837,27 @@ export default function StaticLabApp() {
                 <input
                   type="file"
                   accept="image/*"
+                  capture="environment"
                   onChange={(event) => {
                     const file = event.target.files?.[0];
                     setPhotoPreview(file ? URL.createObjectURL(file) : null);
+                    setPhotoDataUrl(null);
+                    setEstimate(null);
+                    if (!file) {
+                      return;
+                    }
+                    void prepareMealPhotoDataUrl(file)
+                      .then((dataUrl) => {
+                        setPhotoDataUrl(dataUrl);
+                        setStatus("Photo ready for recognition");
+                      })
+                      .catch((error) => {
+                        const message = getErrorMessage(error);
+                        setPhotoPreview(null);
+                        setPhotoDataUrl(null);
+                        setStatus(message);
+                        showToast(message, "error");
+                      });
                   }}
                 />
                 {photoPreview ? (
@@ -3569,8 +3867,8 @@ export default function StaticLabApp() {
                   <span>Tap to add food photo</span>
                 )}
               </label>
-              <button type="submit" className="secondary-button wide">
-                {photoPreview ? "Estimate food" : "Add photo first"}
+              <button type="submit" className="secondary-button wide" disabled={!photoDataUrl || isFoodLoading}>
+                {photoPreview ? (photoDataUrl ? "Recognize food" : "Preparing photo...") : "Add photo first"}
               </button>
             </form>
           </section>

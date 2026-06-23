@@ -475,6 +475,34 @@ class NutritionImageAnalyzeResponse(BaseModel):
     model: str
 
 
+class BarcodeImageAnalyzeRequest(BaseModel):
+    image_data_url: str = Field(..., min_length=32, max_length=260_000)
+    locale: str = Field("en", max_length=16)
+    notes: str = Field("", max_length=240)
+
+    @field_validator("image_data_url")
+    @classmethod
+    def validate_image_data_url(cls, value: str) -> str:
+        return NutritionImageAnalyzeRequest.validate_image_data_url(value)
+
+    @field_validator("locale", "notes")
+    @classmethod
+    def validate_text(cls, value: str | None) -> str | None:
+        return assert_chat_clean(value) if value else value
+
+
+class BarcodeImageAnalyzeResponse(BaseModel):
+    barcode: str | None = None
+    candidates: list[str] = Field(default_factory=list)
+    raw_text: str = ""
+    confidence: float = Field(0.0, ge=0.0, le=1.0)
+    food: FoodItem | None = None
+    provider: str
+    model: str
+    status: Literal["matched", "not_found", "no_code"]
+    message: str
+
+
 class RegisterRequest(BaseModel):
     name: str = Field(..., min_length=2, max_length=80)
     email: str = Field(..., min_length=5, max_length=120)
@@ -4248,6 +4276,130 @@ def generate_gemini_image_analysis(payload: NutritionImageAnalyzeRequest) -> Nut
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="AI vision provider returned invalid JSON") from exc
 
 
+def barcode_candidates_from_text(value: str) -> list[str]:
+    seen: set[str] = set()
+    candidates: list[str] = []
+    for raw in re.findall(r"\d[\d\s\-]{6,20}\d", value):
+        digits = re.sub(r"\D", "", raw)
+        if 8 <= len(digits) <= 14 and digits not in seen:
+            seen.add(digits)
+            candidates.append(digits)
+    return candidates[:8]
+
+
+def generate_gemini_barcode_analysis(payload: BarcodeImageAnalyzeRequest) -> BarcodeImageAnalyzeResponse:
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AI barcode reader is not configured")
+
+    header, _, data = payload.image_data_url.partition(",")
+    mime = header.removeprefix("data:").split(";")[0]
+    prompt = (
+        "You are static_lab's barcode and QR reader. Return JSON only. "
+        "Read the image and extract product barcode digits or QR payload. "
+        "Prefer GTIN/EAN/UPC product numbers with 8 to 14 digits. "
+        "If the barcode is blurry, still return possible candidates. "
+        "Schema: {barcode:null|string, candidates:string[], raw_text:string, confidence:number, message:string}. "
+        "Do not invent a barcode. If no product barcode or QR number is visible, barcode must be null and candidates empty. "
+        f"User locale: {payload.locale}. Notes: {payload.notes}."
+    )
+    body = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": prompt},
+                    {"inline_data": {"mime_type": mime, "data": data}},
+                ],
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.05,
+            "topP": 0.7,
+            "maxOutputTokens": 500,
+            "responseMimeType": "application/json",
+        },
+    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    try:
+        with httpx.Client(timeout=28.0, trust_env=False) as client:
+            response = client.post(
+                url,
+                headers={
+                    "x-goog-api-key": GEMINI_API_KEY,
+                    "Content-Type": "application/json",
+                },
+                json=body,
+            )
+            response.raise_for_status()
+            data_json = response.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="AI barcode reader request failed") from exc
+
+    text = "\n".join(
+        part.get("text", "")
+        for part in data_json.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+    ).strip()
+    if not text:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="AI barcode reader returned an empty reply")
+
+    try:
+        parsed = parse_json_object(text)
+    except json.JSONDecodeError:
+        parsed = {"raw_text": text, "candidates": barcode_candidates_from_text(text)}
+
+    raw_text = normalize_text(str(parsed.get("raw_text") or text))[:500]
+    parsed_candidates = [
+        normalize_text(str(candidate))
+        for candidate in (parsed.get("candidates") or [])
+        if candidate is not None
+    ]
+    barcode_value = normalize_text(str(parsed.get("barcode") or ""))
+    candidates = barcode_candidates_from_text(" ".join([barcode_value, raw_text, *parsed_candidates]))
+    barcode_value = candidates[0] if candidates else ""
+
+    matched_food = None
+    for candidate in candidates:
+        matched_food = get_food_by_barcode(candidate)
+        if matched_food:
+            barcode_value = candidate
+            break
+
+    language = "ru" if payload.locale.lower().startswith("ru") else "en"
+    if matched_food:
+        message = (
+            f"Нашел продукт по штрихкоду {barcode_value}: {matched_food.name}."
+            if language == "ru"
+            else f"Found product for barcode {barcode_value}: {matched_food.name}."
+        )
+        status_label: Literal["matched", "not_found", "no_code"] = "matched"
+    elif barcode_value:
+        message = (
+            f"Считал штрихкод {barcode_value}, но такого продукта нет в базе."
+            if language == "ru"
+            else f"Read barcode {barcode_value}, but no product matched the database."
+        )
+        status_label = "not_found"
+    else:
+        message = (
+            "Не смог уверенно считать штрихкод. Сделай фото ближе и ровнее."
+            if language == "ru"
+            else "Could not read a barcode confidently. Try a closer, straighter photo."
+        )
+        status_label = "no_code"
+
+    return BarcodeImageAnalyzeResponse(
+        barcode=barcode_value or None,
+        candidates=candidates,
+        raw_text=raw_text,
+        confidence=float(parsed.get("confidence") or (0.82 if matched_food else 0.45 if barcode_value else 0.0)),
+        food=matched_food,
+        provider="gemini",
+        model=GEMINI_MODEL,
+        status=status_label,
+        message=message,
+    )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_storage_with_retries()
@@ -4487,6 +4639,15 @@ def food_by_barcode(barcode: str) -> FoodItem:
     if food is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Barcode not found")
     return food
+
+
+@app.post(
+    "/api/v1/foods/barcode-image",
+    response_model=BarcodeImageAnalyzeResponse,
+    tags=["Nutrition"],
+)
+def analyze_barcode_image(payload: BarcodeImageAnalyzeRequest) -> BarcodeImageAnalyzeResponse:
+    return generate_gemini_barcode_analysis(payload)
 
 
 @app.post(

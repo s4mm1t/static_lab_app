@@ -110,6 +110,21 @@ def test_turso_product_source_mapping(monkeypatch) -> None:
     assert main.get_food_by_barcode("8410000000000").name.startswith("Yogur")
 
 
+def test_barcode_image_endpoint_contract_without_provider_key() -> None:
+    assert main.barcode_candidates_from_text("EAN 8 417-077-238-6866 and QR") == ["84170772386866"]
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/foods/barcode-image",
+            json={
+                "image_data_url": "data:image/png;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "locale": "ru",
+            },
+        )
+        assert response.status_code == 503
+        assert response.json()["detail"] == "AI barcode reader is not configured"
+
+
 def test_auth_meal_log_and_delete() -> None:
     with TestClient(app) as client:
         register = client.post(
